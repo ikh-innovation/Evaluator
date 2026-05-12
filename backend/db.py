@@ -1,14 +1,9 @@
-"""SQLite-backed history of evaluation runs.
-
-One row per Call ID — uploading a new evaluation for an existing Call ID
-overwrites the previous entry (matches the user's stated workflow).
-"""
-
 from __future__ import annotations
 
 import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any, Iterator
 
 from .config import RUNS_DB_PATH
@@ -16,16 +11,16 @@ from .config import RUNS_DB_PATH
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
-    call_id           TEXT PRIMARY KEY,
-    proposal_acronym  TEXT NOT NULL,
-    action_type       TEXT NOT NULL,
-    weighted_total    REAL NOT NULL,
+    call_id            TEXT PRIMARY KEY,
+    proposal_acronym   TEXT NOT NULL,
+    action_type        TEXT NOT NULL,
+    weighted_total     REAL NOT NULL,
     max_weighted_total REAL NOT NULL,
-    overall_threshold REAL,
-    predicted_band    TEXT,
+    overall_threshold  REAL,
+    predicted_band     TEXT,
     overall_confidence TEXT,
-    generated_at      TEXT NOT NULL,
-    result_json       TEXT NOT NULL
+    generated_at       TEXT NOT NULL,
+    result_json        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_runs_generated_at ON runs(generated_at);
 """
@@ -45,7 +40,6 @@ def _connect() -> Iterator[sqlite3.Connection]:
 
 
 def save_run(result: dict[str, Any]) -> None:
-    """Insert-or-replace by call_id."""
     with _connect() as conn:
         conn.execute(
             """
@@ -75,7 +69,6 @@ def save_run(result: dict[str, Any]) -> None:
 
 
 def list_runs() -> list[dict[str, Any]]:
-    """Summary list ordered by most recent first."""
     with _connect() as conn:
         rows = conn.execute(
             """
@@ -105,7 +98,6 @@ def delete_run(call_id: str) -> None:
 
 
 def wipe_all() -> int:
-    """Delete every row in the history table. Returns rows removed."""
     with _connect() as conn:
         cur = conn.execute("DELETE FROM runs")
         return cur.rowcount or 0

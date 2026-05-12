@@ -1,9 +1,3 @@
-"""Runtime configuration for the EDF Evaluator backend.
-
-All values can be overridden via environment variables so the same code runs
-on a developer laptop and on the GPU server without edits.
-"""
-
 from __future__ import annotations
 
 import os
@@ -11,31 +5,27 @@ from pathlib import Path
 
 ROOT: Path = Path(__file__).resolve().parents[1]
 DATA_DIR: Path = ROOT / "data"
-KB_DIR: Path = DATA_DIR / "kb"
 RUNS_DB_PATH: Path = DATA_DIR / "runs.sqlite"
 INPUT_DOCS_DIR: Path = ROOT / "input_docs"
 
 OLLAMA_BASE_URL: str = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
-# Chat model used for criterion evaluations + summaries.
-# Override with `EDF_CHAT_MODEL=qwen2.5:14b` etc.
-CHAT_MODEL: str = os.environ.get("EDF_CHAT_MODEL", "gemma3:12b")
-
-# Embedding model. Pull once with `ollama pull nomic-embed-text`.
+CHAT_MODEL: str = os.environ.get("EDF_CHAT_MODEL", "llama3.1:latest")
 EMBED_MODEL: str = os.environ.get("EDF_EMBED_MODEL", "nomic-embed-text")
 
-# Retrieval / chunking knobs
-KB_TOP_K: int = int(os.environ.get("EDF_KB_TOP_K", "4"))
-PROPOSAL_CHUNK_TOP_K: int = int(os.environ.get("EDF_PROPOSAL_TOP_K", "8"))
-# Token-aware proposal chunking (~3 chars/token rough estimate)
+PROPOSAL_CHUNK_TOP_K: int = int(os.environ.get("EDF_PROPOSAL_TOP_K", "4"))
 CHUNK_SIZE_CHARS: int = int(os.environ.get("EDF_CHUNK_SIZE", "1500"))
-CHUNK_OVERLAP_CHARS: int = int(os.environ.get("EDF_CHUNK_OVERLAP", "200"))
-# Hard cap on text we feed to the chat model per criterion. Must fit in
-# the chat model's context window (gemma3:12b defaults to 8192 tokens).
-MAX_PROPOSAL_CHARS_INLINE: int = int(os.environ.get("EDF_MAX_INLINE_CHARS", "12000"))
-# Hard cap per single embedding call. Ollama's nomic-embed-text enforces
-# ~2048 tokens; dense PDF text (tables, ToCs) can hit 1 token / 1.5 chars,
-# so we stay well under that. Pipeline auto-halves further on failure.
+CHUNK_OVERLAP_CHARS: int = int(os.environ.get("EDF_CHUNK_OVERLAP", "150"))
+MAX_PROPOSAL_CHARS_INLINE: int = int(os.environ.get("EDF_MAX_INLINE_CHARS", "5000"))
 MAX_EMBED_CHARS: int = int(os.environ.get("EDF_MAX_EMBED_CHARS", "2500"))
 
-REQUEST_TIMEOUT_S: float = float(os.environ.get("EDF_REQUEST_TIMEOUT", "300"))
+REQUEST_TIMEOUT_S: float = float(os.environ.get("EDF_REQUEST_TIMEOUT", "600"))
+
+MAX_WORKERS: int = int(os.environ.get("EDF_MAX_WORKERS", "2"))
+
+# Number of model layers to offload to GPU. 99 = use all available GPU layers.
+# Set EDF_NUM_GPU=0 to force CPU-only.
+# NUM_GPU: int = int(os.environ.get("EDF_NUM_GPU", "99"))
+NUM_GPU: int = 0
+# GPU device index to use (0 = first GPU, e.g. RTX 5070).
+MAIN_GPU: int = int(os.environ.get("EDF_MAIN_GPU", "0"))

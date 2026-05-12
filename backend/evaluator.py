@@ -1,10 +1,3 @@
-"""Per-criterion LLM evaluation chain.
-
-The prompt embeds the official EDF 0–5 rubric and demands evidence-grounded
-JSON output. Output is structurally validated and the score is snapped to
-half-point increments per EDF rules.
-"""
-
 from __future__ import annotations
 
 import json
@@ -13,17 +6,16 @@ from typing import Any
 
 from langchain_ollama import ChatOllama
 
-from . import kb
 from .config import (
     CHAT_MODEL,
+    MAIN_GPU,
     MAX_PROPOSAL_CHARS_INLINE,
+    NUM_GPU,
     OLLAMA_BASE_URL,
     REQUEST_TIMEOUT_S,
 )
 
 
-# Official EDF call-fiche rubric (call-fiche §9). Each criterion is scored
-# 0–5 in 0.5 increments by the same scale.
 EDF_RUBRIC = """EDF scoring rubric (apply per criterion, 0–5 in 0.5 increments):
 0 — Fails to address the criterion or cannot be assessed.
 1 — Poor. Inadequately addressed; serious inherent weaknesses.
@@ -33,9 +25,9 @@ EDF_RUBRIC = """EDF scoring rubric (apply per criterion, 0–5 in 0.5 increments
 5 — Excellent. Addressed convincingly; only minor shortcomings, if any."""
 
 
-EVAL_PROMPT = """You are an internal EDF (European Defence Fund) proposal evaluation
-assistant. You produce assessments in the voice of an official Evaluation
-Summary Report (ESR), grounded ONLY in the proposal text provided below.
+EVAL_PROMPT = """You are an EDF (European Defence Fund) proposal evaluation assistant.
+You produce assessments in the voice of an official Evaluation Summary Report (ESR),
+grounded ONLY in the proposal text provided below.
 
 {rubric}
 
@@ -45,27 +37,20 @@ Criterion under evaluation:
 - Weight: x{weight}
 - Action type: {action_type}
 
-Retrieved historical ESR examples for this criterion (use ONLY as patterns
-for evaluator language and common concerns — do NOT copy their content):
----
-{rag_context}
----
-
-Proposal excerpts to evaluate (each block is labelled with its source
-section / page so you can cite it):
+Proposal excerpts to evaluate (each block is labelled with its source section):
 ---
 {proposal_text}
 ---
 
-Strict rules:
+Rules:
 1. Assess ONLY the criterion above.
-2. Every strength and weakness must be grounded in the proposal text. Quote
-   a short phrase from the proposal verbatim inside the strength or weakness
-   string, in double quotes. If you cannot find evidence, do not claim it.
+2. Every strength and weakness must be grounded in the proposal text. Quote a short
+   phrase from the proposal verbatim inside the string, in double quotes. If you
+   cannot find evidence, do not claim it.
 3. Use formal, ESR-style language: specific, evaluative, concise.
 4. Apply the EDF rubric strictly. Do NOT inflate scores.
-5. Confidence: "high" if you found multiple evidence quotes; "medium" if
-   one or two; "low" if retrieval was thin or the proposal was vague.
+5. Confidence: "high" if you found multiple evidence quotes; "medium" if one or two;
+   "low" if the proposal was vague or evidence was thin.
 6. Output STRICT JSON ONLY (no markdown, no prose) with this exact schema:
 
 {{
@@ -75,8 +60,7 @@ Strict rules:
   "weaknesses": [string, ...],
   "missing_evidence": [string, ...],
   "evaluator_comment": string,
-  "recommendations": [string, ...],
-  "citations": [string, ...]
+  "recommendations": [string, ...]
 }}
 """
 
@@ -117,6 +101,9 @@ def _chat_json_model() -> ChatOllama:
             temperature=0.1,
             format="json",
             timeout=REQUEST_TIMEOUT_S,
+            keep_alive=-1,
+            num_gpu=NUM_GPU,
+            main_gpu=MAIN_GPU,
         )
     return _chat_json
 
@@ -129,6 +116,9 @@ def _chat_text_model() -> ChatOllama:
             base_url=OLLAMA_BASE_URL,
             temperature=0.3,
             timeout=REQUEST_TIMEOUT_S,
+            keep_alive=-1,
+            num_gpu=NUM_GPU,
+            main_gpu=MAIN_GPU,
         )
     return _chat_text
 
@@ -164,33 +154,13 @@ def evaluate_criterion(
     weight: float,
     action_type: str,
 ) -> dict:
-    retrieved = kb.retrieve(criterion_name, action_type, k=4)
-    if retrieved:
-        rag_context = "\n\n".join(
-            f"[{r['metadata'].get('source', '?')}] {r['document']}"
-            for r in retrieved
-        )
-        default_citations = [
-            (
-                f"{r['metadata'].get('source', '?')} — "
-                f"Criterion {r['metadata'].get('criterion', '?')} "
-                f"(score {r['metadata'].get('score', '?')}/5)"
-            )
-            for r in retrieved
-        ]
-    else:
-        rag_context = "(no historical examples available yet)"
-        default_citations = []
-
     prompt = EVAL_PROMPT.format(
         rubric=EDF_RUBRIC,
         criterion_name=criterion_name,
         criterion_description=criterion_description or "(no description)",
         weight=weight,
         action_type=action_type,
-        rag_context=rag_context,
-        proposal_text=proposal_text[:MAX_PROPOSAL_CHARS_INLINE]
-        or "(empty proposal text)",
+        proposal_text=proposal_text[:MAX_PROPOSAL_CHARS_INLINE] or "(empty proposal text)",
     )
     msg = _chat_json_model().invoke(prompt)
     parsed = _parse_json(msg.content)
@@ -201,8 +171,6 @@ def evaluate_criterion(
     parsed.setdefault("recommendations", [])
     parsed.setdefault("evaluator_comment", "")
     parsed.setdefault("confidence", "medium")
-    if not parsed.get("citations"):
-        parsed["citations"] = default_citations
     parsed["score"] = _coerce_score(parsed.get("score", 0))
     return parsed
 

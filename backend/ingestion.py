@@ -53,16 +53,37 @@ def _extract_docx(data: bytes) -> str:
 
 
 def _extract_pdf(data: bytes) -> str:
+    # PyMuPDF is the fastest and never hangs — always try first.
     try:
-        import pdfplumber
+        import fitz  # PyMuPDF
 
-        with pdfplumber.open(io.BytesIO(data)) as pdf:
-            return "\n".join((page.extract_text() or "") for page in pdf.pages)
+        doc = fitz.open(stream=data, filetype="pdf")
+        return "\n".join(page.get_text() for page in doc)
     except Exception:
+        pass
+    # pypdf: reliable fallback, no hang risk.
+    try:
         from pypdf import PdfReader
 
         reader = PdfReader(io.BytesIO(data))
         return "\n".join((page.extract_text() or "") for page in reader.pages)
+    except Exception:
+        pass
+    # pdfplumber last — can hang on complex PDFs; run in a thread with timeout.
+    import concurrent.futures
+
+    def _plumber() -> str:
+        import pdfplumber
+
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            return "\n".join((page.extract_text() or "") for page in pdf.pages)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(_plumber)
+        try:
+            return fut.result(timeout=60)
+        except Exception:
+            return ""
 
 
 # ---------------------------------------------------------------------------
@@ -158,27 +179,52 @@ def _pdf_sections(data: bytes) -> list[dict]:
     further split each page into retrieval-sized pieces.
     """
     sections: list[dict] = []
+    # PyMuPDF — fastest, never hangs.
     try:
-        import pdfplumber
+        import fitz  # PyMuPDF
 
-        with pdfplumber.open(io.BytesIO(data)) as pdf:
-            for i, page in enumerate(pdf.pages, start=1):
-                text = (page.extract_text() or "").strip()
-                if text:
-                    sections.append(
-                        {"title": f"Page {i}", "content": text, "page": i}
-                    )
+        doc = fitz.open(stream=data, filetype="pdf")
+        for i, page in enumerate(doc, start=1):
+            text = page.get_text().strip()
+            if text:
+                sections.append({"title": f"Page {i}", "content": text, "page": i})
+        if sections:
+            return sections
     except Exception:
+        pass
+    # pypdf fallback.
+    try:
         from pypdf import PdfReader
 
         reader = PdfReader(io.BytesIO(data))
         for i, page in enumerate(reader.pages, start=1):
             text = (page.extract_text() or "").strip()
             if text:
-                sections.append(
-                    {"title": f"Page {i}", "content": text, "page": i}
-                )
-    return sections
+                sections.append({"title": f"Page {i}", "content": text, "page": i})
+        if sections:
+            return sections
+    except Exception:
+        pass
+    # pdfplumber last resort — timeout guarded.
+    import concurrent.futures
+
+    def _plumber_sections() -> list[dict]:
+        import pdfplumber
+
+        out: list[dict] = []
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            for i, page in enumerate(pdf.pages, start=1):
+                text = (page.extract_text() or "").strip()
+                if text:
+                    out.append({"title": f"Page {i}", "content": text, "page": i})
+        return out
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(_plumber_sections)
+        try:
+            return fut.result(timeout=60)
+        except Exception:
+            return sections
 
 
 # ---- Heuristic for plain text / fallback ---------------------------------
