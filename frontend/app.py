@@ -187,8 +187,9 @@ button[data-testid="stBaseButton-primary"]:disabled {
     overflow-x: auto;
     overflow-y: visible;
     scroll-behavior: smooth;
-    gap: .5rem !important;
-    padding: .5rem .9rem .6rem .9rem;
+    align-items: center !important;
+    gap: .55rem !important;
+    padding: .6rem .9rem .7rem .9rem;
     margin: 0 0 .8rem 0;
     background: linear-gradient(90deg, #fef3c7 0%, #fde68a 100%);
     border: 1px solid #fcd34d;
@@ -202,7 +203,8 @@ button[data-testid="stBaseButton-primary"]:disabled {
 [data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar-track { background: rgba(255,255,255,.25); border-radius: 4px; }
 [data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar-thumb { background: #d97706; border-radius: 4px; }
 
-/* Each column shrinks to content and lays out its kids in a row. */
+/* Each column = one (chip + ×) pair. Shrinks to content; kids in a single
+   horizontal row with zero gap so the chip and × visually become one pill. */
 [data-testid="stHorizontalBlock"]:has(.qbar-chip) > [data-testid="stColumn"] {
     flex: 0 0 auto !important;
     min-width: 0 !important;
@@ -212,24 +214,44 @@ button[data-testid="stBaseButton-primary"]:disabled {
 [data-testid="stHorizontalBlock"]:has(.qbar-chip) > [data-testid="stColumn"] > div {
     display: flex !important;
     flex-direction: row !important;
-    align-items: center !important;
+    align-items: stretch !important;
     gap: 0 !important;
     flex-wrap: nowrap !important;
 }
-/* And the chip + button shouldn't take the column's full width. */
 [data-testid="stHorizontalBlock"]:has(.qbar-chip) > [data-testid="stColumn"] > div > * {
     width: auto !important;
     flex: 0 0 auto !important;
 }
 
-/* The chip — a self-contained rounded rectangle. Compact but roomy. */
+/* Flatten ALL of Streamlit's inner wrappers so chip & × align exactly. */
+[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stElementContainer"] {
+    padding: 0 !important;
+    margin: 0 !important;
+    display: inline-flex !important;
+    align-items: stretch !important;
+}
+[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stMarkdown"],
+[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stMarkdownContainer"] {
+    padding: 0 !important;
+    margin: 0 !important;
+    line-height: 1 !important;
+    display: inline-flex !important;
+    align-items: stretch !important;
+}
+
+/* ── The chip — left half of the pill. ─────────────────────────────────
+   All variant colors live on the chip; CSS :has() on the column then
+   propagates the same colors to the × button so they always agree. */
 .qbar-chip {
-    display: inline-flex; align-items: center; gap: .4rem;
-    height: 1.95rem;
-    padding: 0 .55rem 0 .8rem;
-    border-radius: 8px;
-    background: #ffffff;
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    height: 2rem;
+    padding: 0 .55rem 0 .85rem;
     border: 1px solid #e5e7eb;
+    border-right: none;
+    border-radius: 8px 0 0 8px;
+    background: #ffffff;
     color: #334155;
     font-size: .88rem;
     line-height: 1;
@@ -237,54 +259,81 @@ button[data-testid="stBaseButton-primary"]:disabled {
     box-shadow: 0 1px 0 rgba(15, 23, 42, .04);
 }
 .qbar-chip.running   { border-color: #fcd34d; background: #fffbeb; color: #92400e; }
-.qbar-chip.mine      { border-color: #2563eb; background: #eff6ff; color: #1e40af; }
+.qbar-chip.mine      { border-color: #93c5fd; background: #eff6ff; color: #1e40af; }
 .qbar-chip.cancelling{ border-color: #cbd5e1; background: #f1f5f9; color: #64748b;
                         text-decoration: line-through; opacity: .7; }
 .qbar-chip code      { background: transparent; padding: 0; color: inherit; font-size: .8rem; opacity: .75; }
 
-/* The × is a near-invisible glyph that lives just to the right of the chip.
-   No border, no background. Lights up red on hover. */
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] {
-    margin-left: -.05rem;
-}
+/* ── The × — right half of the same pill. Matches the chip's height,
+   border, and background; just the rounded corners flip to the right. */
 [data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button {
-    height: 1.95rem;
-    min-height: 1.95rem;
-    width: 1.4rem;
-    padding: 0;
-    margin: 0;
-    line-height: 1;
-    font-size: .82rem;
-    font-weight: 400;
-    border: none;
-    background: transparent !important;
-    color: #94a3b8;
-    opacity: .55;
+    height: 2rem !important;
+    min-height: 2rem !important;
+    width: 1.55rem !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    line-height: 1 !important;
+    font-size: .85rem !important;
+    font-weight: 500 !important;
+    border: 1px solid #e5e7eb !important;
+    border-left: none !important;
+    border-radius: 0 8px 8px 0 !important;
+    background: #ffffff !important;
+    color: #94a3b8 !important;
     cursor: pointer;
-    border-radius: 6px;
-    box-shadow: none !important;
-    transition: color .12s ease, opacity .12s ease, background-color .12s ease;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, .04) !important;
+    transition: color .12s, background-color .12s, border-color .12s;
 }
+/* The button's internal <p> wraps the "✕" label — flatten it. */
+[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button p,
+[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button div {
+    margin: 0 !important;
+    padding: 0 !important;
+    line-height: 1 !important;
+    font-size: inherit !important;
+    font-weight: inherit !important;
+    color: inherit !important;
+}
+
+/* Variant colors flow from the chip to the × via :has() on the column. */
+[data-testid="stColumn"]:has(.qbar-chip.running) [data-testid="stButton"] > button {
+    background: #fffbeb !important;
+    border-color: #fcd34d !important;
+    color: #b45309 !important;
+}
+[data-testid="stColumn"]:has(.qbar-chip.mine) [data-testid="stButton"] > button {
+    background: #eff6ff !important;
+    border-color: #93c5fd !important;
+    color: #3b82f6 !important;
+}
+
+/* Hover — only the × box changes, never the chip. Subtle pink tint. */
 [data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button:hover {
-    color: #dc2626;
-    opacity: 1;
-    background: transparent !important;
+    color: #dc2626 !important;
+    background: #fee2e2 !important;
+    border-color: #fca5a5 !important;
 }
 [data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button:focus,
 [data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button:active {
     outline: none !important;
-    box-shadow: none !important;
-    background: transparent !important;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, .04) !important;
 }
 
+/* Cancelling: a static "…" pill stamped on the right, same dimensions. */
 .qbar-cancel-pending {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 1.4rem;
-    height: 1.95rem;
-    margin-left: -.05rem;
-    color: #94a3b8;
-    font-size: .82rem;
-    opacity: .65;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.55rem;
+    height: 2rem;
+    border: 1px solid #cbd5e1;
+    border-left: none;
+    border-radius: 0 8px 8px 0;
+    background: #f1f5f9;
+    color: #64748b;
+    font-size: .85rem;
+    opacity: .85;
+    box-shadow: 0 1px 0 rgba(15, 23, 42, .04);
 }
 </style>
 """, unsafe_allow_html=True)

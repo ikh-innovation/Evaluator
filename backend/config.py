@@ -25,7 +25,7 @@ MAX_WORKERS: int = int(os.environ.get("EDF_MAX_WORKERS", "2"))
 
 # Number of model layers to offload to GPU. 99 = use all available GPU layers.
 # Set EDF_NUM_GPU=0 to force CPU-only.
-# NUM_GPU: int = int(os.environ.get("EDF_NUM_GPU", "99"))
-NUM_GPU: int = 0
+NUM_GPU: int = int(os.environ.get("EDF_NUM_GPU", "99"))
+# NUM_GPU: int = 0
 # GPU device index to use (0 = first GPU, e.g. RTX 5070).
 MAIN_GPU: int = int(os.environ.get("EDF_MAIN_GPU", "0"))
