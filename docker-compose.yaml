@@ -1,0 +1,66 @@
+services:
+  data:
+    build:
+      context: ./data
+    volumes:
+      - ./data:/data
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      EDF_CHAT_MODEL: ${EDF_CHAT_MODEL:-llama3.1:latest}
+      EDF_EMBED_MODEL: ${EDF_EMBED_MODEL:-nomic-embed-text}
+    depends_on:
+      data:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    volumes:
+      - ./data:/app/data
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      EDF_CHAT_MODEL: ${EDF_CHAT_MODEL:-llama3.1:latest}
+      EDF_EMBED_MODEL: ${EDF_EMBED_MODEL:-nomic-embed-text}
+    depends_on:
+      data:
+        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
