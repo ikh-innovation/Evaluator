@@ -26,6 +26,21 @@ services:
       retries: 5
       start_period: 30s
 
+  ollama-init:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        ollama pull ${EDF_CHAT_MODEL:-llama3.1:latest}
+        ollama pull ${EDF_EMBED_MODEL:-nomic-embed-text}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: on-failure
+
   frontend:
     build:
       context: .
@@ -41,8 +56,8 @@ services:
     depends_on:
       data:
         condition: service_completed_successfully
-      ollama:
-        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   backend:
@@ -58,8 +73,8 @@ services:
     depends_on:
       data:
         condition: service_completed_successfully
-      ollama:
-        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
 volumes:
