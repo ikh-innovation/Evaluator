@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend import db, jobs, worker  # noqa: E402
+from backend import db, jobs  # noqa: E402
 from backend.config import CHAT_MODEL, EMBED_MODEL, OLLAMA_BASE_URL  # noqa: E402
 from backend.criteria_io import criteria_to_xlsx_bytes, xlsx_to_criteria  # noqa: E402
 
@@ -263,6 +263,7 @@ button[data-testid="stBaseButton-primary"]:disabled {
 .qbar-chip.cancelling{ border-color: #cbd5e1; background: #f1f5f9; color: #64748b;
                         text-decoration: line-through; opacity: .7; }
 .qbar-chip code      { background: transparent; padding: 0; color: inherit; font-size: .8rem; opacity: .75; }
+.qbar-submitter      { font-size: .75rem; opacity: .65; font-style: italic; margin-left: .15rem; }
 
 /* ── The × — right half of the same pill. Matches the chip's height,
    border, and background; just the rounded corners flip to the right. */
@@ -347,6 +348,7 @@ _DEFAULTS: dict[str, Any] = {
     "action_type": "Research",
     "call_id": "",
     "proposal_acronym": "",
+    "submitted_by": "",
     # Upload (raw bytes — worker handles extraction / embedding)
     "embedded_key": None,
     "proposal_bytes": None,
@@ -370,10 +372,6 @@ if st.session_state.session_id is None:
 
 if st.session_state.criteria is None:
     st.session_state.criteria = [Criterion(**c) for c in DEFAULT_RESEARCH_CRITERIA]
-
-# Start the background queue worker (idempotent — safe on every rerun).
-worker.start_worker_once()
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -586,6 +584,7 @@ def _queue_bar() -> None:
         with strip_cols[idx]:
             acronym = _escape(j.get("proposal_acronym") or "—")
             call_id = _escape(j.get("call_id") or "")
+            submitter = _escape(j.get("submitted_by") or "—")
             is_cancelling = bool(j.get("cancel_requested"))
 
             classes = ["qbar-chip"]
@@ -605,8 +604,9 @@ def _queue_bar() -> None:
             you = " (you)" if j["job_id"] in my_ids else ""
 
             st.markdown(
-                f'<div class="{" ".join(classes)}" title="{call_id}">{marker} '
-                f"<b>{acronym}</b>{you} <code>{call_id}</code></div>",
+                f'<div class="{" ".join(classes)}" title="{call_id} · submitted by {submitter}">{marker} '
+                f"<b>{acronym}</b>{you} <code>{call_id}</code> "
+                f'<span class="qbar-submitter">by {submitter}</span></div>',
                 unsafe_allow_html=True,
             )
             if is_cancelling:
@@ -776,7 +776,7 @@ _queue_bar()
 # ---------------------------------------------------------------------------
 
 st.title("EDF Proposal Evaluator")
-st.caption(f"Ollama @ `{OLLAMA_BASE_URL}` · chat=`{CHAT_MODEL}` · embed=`{EMBED_MODEL}`")
+st.caption(f"LLM Model =`{CHAT_MODEL}` · Embeddings Model=`{EMBED_MODEL}`")
 
 # ---------------------------------------------------------------------------
 # Sidebar — always editable. Edits apply to the *next* submission; jobs
@@ -796,6 +796,11 @@ with st.sidebar:
     new_action = st.selectbox(
         "Action type", ["Research", "Development"],
         index=0 if st.session_state.action_type == "Research" else 1,
+    )
+    st.session_state.submitted_by = st.text_input(
+        "Submitted by *", value=st.session_state.submitted_by,
+        placeholder="e.g. Jane Doe",
+        help="Shown in the shared queue so others know whose job is running.",
     )
     if new_action != st.session_state.action_type:
         st.session_state.action_type = new_action
@@ -948,6 +953,8 @@ def _validate() -> list[str]:
         errors.append("Call ID is required.")
     if not st.session_state.proposal_acronym.strip():
         errors.append("Proposal acronym is required.")
+    if not st.session_state.submitted_by.strip():
+        errors.append("Submitted by is required.")
     if not st.session_state.criteria:
         errors.append("At least one criterion is required.")
     return errors
@@ -975,7 +982,7 @@ if run_clicked:
                 proposal_suffix=suffix_for_job,
                 pasted_text=pasted_for_job,
                 persist=is_full_proposal,
-                submitted_by=st.session_state.session_id,
+                submitted_by=st.session_state.submitted_by.strip(),
             )
             st.session_state.my_job_ids = list(st.session_state.my_job_ids) + [job_id]
             st.toast(
