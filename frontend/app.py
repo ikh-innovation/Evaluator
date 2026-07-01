@@ -238,6 +238,14 @@ button[data-testid="stBaseButton-primary"]:disabled {
     display: inline-flex !important;
     align-items: stretch !important;
 }
+/* The markdown container's internal <p> wraps the "…"/"🔒" chips — flatten
+   it the same way the button's <p> is flattened, so both sit at the same
+   baseline/height as the × button. */
+[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stMarkdownContainer"] p {
+    margin: 0 !important;
+    padding: 0 !important;
+    display: contents !important;
+}
 
 /* ── The chip — left half of the pill. ─────────────────────────────────
    All variant colors live on the chip; CSS :has() on the column then
