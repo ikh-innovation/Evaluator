@@ -30,12 +30,14 @@ services:
     image: ollama/ollama:latest
     environment:
       OLLAMA_HOST: http://ollama:11434
+      EDF_CHAT_MODEL: ${EDF_CHAT_MODEL-gemma4:12b}
+      EDF_EMBED_MODEL: ${EDF_EMBED_MODEL-nomic-embed-text}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
-        ollama pull ${EDF_CHAT_MODEL:-llama3.1:latest}
-        ollama pull ${EDF_EMBED_MODEL:-nomic-embed-text}
+        ollama pull $$EDF_CHAT_MODEL
+        ollama pull $$EDF_EMBED_MODEL
     depends_on:
       ollama:
         condition: service_healthy
@@ -51,8 +53,8 @@ services:
       - ./data:/app/data
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
-      EDF_CHAT_MODEL: ${EDF_CHAT_MODEL:-llama3.1:latest}
-      EDF_EMBED_MODEL: ${EDF_EMBED_MODEL:-nomic-embed-text}
+      EDF_CHAT_MODEL: ${EDF_CHAT_MODEL-gemma4:12b}
+      EDF_EMBED_MODEL: ${EDF_EMBED_MODEL-nomic-embed-text}
     depends_on:
       data:
         condition: service_completed_successfully
@@ -68,8 +70,8 @@ services:
       - ./data:/app/data
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
-      EDF_CHAT_MODEL: ${EDF_CHAT_MODEL:-llama3.1:latest}
-      EDF_EMBED_MODEL: ${EDF_EMBED_MODEL:-nomic-embed-text}
+      EDF_CHAT_MODEL: ${EDF_CHAT_MODEL-gemma4:12b}
+      EDF_EMBED_MODEL: ${EDF_EMBED_MODEL-nomic-embed-text}
     depends_on:
       data:
         condition: service_completed_successfully
