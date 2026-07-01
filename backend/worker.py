@@ -13,7 +13,10 @@ import threading
 import time
 import traceback
 
+import ollama
+
 from . import db, jobs
+from .config import CHAT_MODEL, OLLAMA_BASE_URL
 from .pipeline import evaluate_proposal
 
 
@@ -78,16 +81,35 @@ def _process_one(job: dict) -> None:
     jobs.mark_done(job_id, result.get("call_id", job["call_id"]))
 
 
+def _unload_chat_model() -> bool:
+    """Best-effort: free the chat model's VRAM once the queue is empty.
+
+    Chat calls pin the model with keep_alive=-1 so it survives gaps between
+    LLM calls within/between jobs; this explicitly evicts it the moment
+    there's nothing left queued, rather than leaving it loaded forever.
+    Returns whether the request succeeded, so callers can retry on failure.
+    """
+    try:
+        ollama.Client(host=OLLAMA_BASE_URL).generate(model=CHAT_MODEL, keep_alive=0)
+        return True
+    except Exception:
+        return False
+
+
 def _loop() -> None:
     jobs.recover_orphans()
+    idle = False
     while True:
         try:
             job = jobs.claim_next()
         except Exception:
             job = None
         if job is None:
+            if not idle:
+                idle = _unload_chat_model()
             time.sleep(_POLL_INTERVAL_S)
             continue
+        idle = False
         try:
             _process_one(job)
         except Exception as exc:

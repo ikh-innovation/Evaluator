@@ -336,6 +336,20 @@ button[data-testid="stBaseButton-primary"]:disabled {
     opacity: .85;
     box-shadow: 0 1px 0 rgba(15, 23, 42, .04);
 }
+.qbar-cancel-locked {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.55rem;
+    height: 2rem;
+    border: 1px solid #cbd5e1;
+    border-left: none;
+    border-radius: 0 8px 8px 0;
+    background: #f8fafc;
+    color: #94a3b8;
+    font-size: .78rem;
+    opacity: .7;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -617,12 +631,17 @@ def _queue_bar() -> None:
                 f'<span class="qbar-submitter">by {submitter}</span></div>',
                 unsafe_allow_html=True,
             )
+            is_owner = bool(st.session_state.submitted_by.strip()) and (
+                (j.get("submitted_by") or "").strip().lower()
+                == st.session_state.submitted_by.strip().lower()
+            )
+
             if is_cancelling:
                 st.markdown(
                     '<span class="qbar-cancel-pending" title="Cancelling — worker will stop at the next checkpoint">…</span>',
                     unsafe_allow_html=True,
                 )
-            else:
+            elif is_owner:
                 if st.button(
                     "✕",
                     key=f"cancel_{j['job_id']}",
@@ -630,6 +649,11 @@ def _queue_bar() -> None:
                 ):
                     jobs.cancel(j["job_id"])
                     st.rerun()
+            else:
+                st.markdown(
+                    f'<span class="qbar-cancel-locked" title="Only {submitter} can cancel this run">🔒</span>',
+                    unsafe_allow_html=True,
+                )
 
 
 # ---------------------------------------------------------------------------
