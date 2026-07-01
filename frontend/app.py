@@ -353,6 +353,7 @@ _DEFAULTS: dict[str, Any] = {
     "embedded_key": None,
     "proposal_bytes": None,
     "proposal_suffix": None,
+    "upload_nonce": 0,          # bumped after each submit to reset the paste/upload widgets
     # Final result (last completed run that belongs to this session)
     "result": None,
     # Dialogs
@@ -361,7 +362,7 @@ _DEFAULTS: dict[str, Any] = {
     # Background queue tracking
     "session_id": None,
     "my_job_ids": [],          # list[str] — jobs submitted from this session and not yet surfaced
-    "last_active_count": 0,    # for top-bar pulse animation
+    "known_active_ids": None,  # last-seen active job ids; any drop (any user) triggers a refresh
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -528,8 +529,15 @@ def _queue_bar() -> None:
     my_ids = set(st.session_state.my_job_ids)
 
     promoted = _promote_finished_my_jobs()
-    if promoted:
-        # Force a full app rerun so the result panel below reflects the new state.
+
+    current_ids = {j["job_id"] for j in active}
+    known_ids = st.session_state.known_active_ids
+    someone_finished = bool(known_ids) and bool(known_ids - current_ids)
+    st.session_state.known_active_ids = current_ids
+
+    if promoted or someone_finished:
+        # Force a full app rerun so the result panel and History reflect the new
+        # state, even when the finished job belongs to another user/session.
         try:
             st.rerun(scope="app")
         except TypeError:
@@ -884,12 +892,14 @@ pasted = st.text_area(
     "Paste sections directly (not saved to history)",
     placeholder="Paste a section of Part B here…",
     height=120,
+    key=f"pasted_{st.session_state.upload_nonce}",
 )
 
 uploaded = st.file_uploader(
     "Or upload the full proposal (DOCX recommended; PDF / TXT accepted)",
     type=["docx", "pdf", "txt", "md"],
     accept_multiple_files=False,
+    key=f"uploaded_{st.session_state.upload_nonce}",
 )
 
 # ── Stash uploaded bytes; the worker handles extraction/chunking/embedding ─
@@ -990,6 +1000,13 @@ if run_clicked:
                 f"({'pasted text — not saved to history' if not is_full_proposal else 'saved to history when done'})",
                 icon="📥",
             )
+            # Reset the proposal-scoped fields for the next submission; Call ID,
+            # Action type, criteria/weights, threshold and Submitted by carry over.
+            st.session_state.proposal_acronym = ""
+            st.session_state.embedded_key = None
+            st.session_state.proposal_bytes = None
+            st.session_state.proposal_suffix = None
+            st.session_state.upload_nonce += 1
             st.rerun()
         except Exception as exc:
             st.error(f"Could not queue evaluation: {exc}")
