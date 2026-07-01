@@ -10,7 +10,7 @@ INPUT_DOCS_DIR: Path = ROOT / "input_docs"
 
 OLLAMA_BASE_URL: str = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
-CHAT_MODEL: str = os.environ.get("EDF_CHAT_MODEL", "llama3.1:latest")
+CHAT_MODEL: str = os.environ.get("EDF_CHAT_MODEL", "gemma4:12b")
 EMBED_MODEL: str = os.environ.get("EDF_EMBED_MODEL", "nomic-embed-text")
 
 PROPOSAL_CHUNK_TOP_K: int = int(os.environ.get("EDF_PROPOSAL_TOP_K", "4"))
