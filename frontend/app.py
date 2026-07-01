@@ -816,6 +816,7 @@ st.caption(f"LLM Model =`{CHAT_MODEL}` · Embeddings Model=`{EMBED_MODEL}`")
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
+    st.image(str(Path(__file__).parent / "ikh_logo.png"), width=220)
     st.header("Call configuration")
     st.session_state.call_id = st.text_input(
         "Call ID *", value=st.session_state.call_id,
