@@ -53,8 +53,8 @@ if submitted:
         st.success(f"Logged in as **{username.strip()}**.")
         st.markdown(
             f'<a href="{app_url}" target="_self" '
-            'style="display:inline-block;padding:.5rem 1rem;border-radius:8px;'
-            'background:#dc2626;color:#fff;text-decoration:none;font-weight:600;">'
+            'style="display:inline-block;padding:.5rem 1rem;border:1px solid #000;'
+            'background:#000;color:#fff;text-decoration:none;font-weight:600;">'
             "Continue to app →</a>",
             unsafe_allow_html=True,
         )

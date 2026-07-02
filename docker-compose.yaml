@@ -35,6 +35,9 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:?OLLAMA_BASE_URL is required in .env}
       EDF_CHAT_MODEL: ${EDF_CHAT_MODEL:?EDF_CHAT_MODEL is required in .env}
       EDF_EMBED_MODEL: ${EDF_EMBED_MODEL:?EDF_EMBED_MODEL is required in .env}
+      EDF_NUM_GPU: ${EDF_NUM_GPU:-99}
+      EDF_MAIN_GPU: ${EDF_MAIN_GPU:-0}
+      EDF_NUM_CTX: ${EDF_NUM_CTX:-8192}
     depends_on:
       data:
         condition: service_completed_successfully
@@ -50,6 +53,9 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:?OLLAMA_BASE_URL is required in .env}
       EDF_CHAT_MODEL: ${EDF_CHAT_MODEL:?EDF_CHAT_MODEL is required in .env}
       EDF_EMBED_MODEL: ${EDF_EMBED_MODEL:?EDF_EMBED_MODEL is required in .env}
+      EDF_NUM_GPU: ${EDF_NUM_GPU:-99}
+      EDF_MAIN_GPU: ${EDF_MAIN_GPU:-0}
+      EDF_NUM_CTX: ${EDF_NUM_CTX:-8192}
     depends_on:
       data:
         condition: service_completed_successfully

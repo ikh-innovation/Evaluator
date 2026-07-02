@@ -43,6 +43,14 @@ def get_username(session_id: str | None) -> str | None:
     return row["username"] if row else None
 
 
+def revoke_session(session_id: str | None) -> None:
+    if not session_id:
+        return
+    with jobs._connect() as conn:
+        conn.executescript(_SESSIONS_SCHEMA)
+        conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+
+
 def peer_url(host_header: str | None, port: int) -> str:
     """Same hostname the browser used to reach this app, different port.
 

@@ -92,12 +92,23 @@ def get_run(call_id: str) -> dict[str, Any] | None:
     return json.loads(row["result_json"])
 
 
-def delete_run(call_id: str) -> None:
+class NotAuthorizedError(Exception):
+    pass
+
+
+def _require_admin(requested_by: str) -> None:
+    if (requested_by or "").strip().lower() != "admin":
+        raise NotAuthorizedError("Only the 'admin' user may perform this action.")
+
+
+def delete_run(call_id: str, requested_by: str) -> None:
+    _require_admin(requested_by)
     with _connect() as conn:
         conn.execute("DELETE FROM runs WHERE call_id = ?", (call_id,))
 
 
-def wipe_all() -> int:
+def wipe_all(requested_by: str) -> int:
+    _require_admin(requested_by)
     with _connect() as conn:
         cur = conn.execute("DELETE FROM runs")
         return cur.rowcount or 0

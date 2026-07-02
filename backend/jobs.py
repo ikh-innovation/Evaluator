@@ -44,7 +44,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     persist           INTEGER NOT NULL DEFAULT 1,
     error             TEXT,
     result_call_id    TEXT,
-    cancel_requested  INTEGER NOT NULL DEFAULT 0
+    cancel_requested  INTEGER NOT NULL DEFAULT 0,
+    chat_model        TEXT,
+    embed_model       TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_submitted_at ON jobs(submitted_at);
@@ -71,6 +73,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0"
         )
+    # chat_model/embed_model added when per-job model selection was introduced.
+    if "chat_model" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN chat_model TEXT")
+    if "embed_model" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN embed_model TEXT")
 
 
 @contextmanager
@@ -110,6 +117,8 @@ def enqueue(
     pasted_text: str | None,
     persist: bool,
     submitted_by: str | None,
+    chat_model: str | None = None,
+    embed_model: str | None = None,
 ) -> str:
     """Pickle the raw payload to disk and insert a queued job. Returns job_id.
 
@@ -137,8 +146,9 @@ def enqueue(
             INSERT INTO jobs (
               job_id, status, call_id, proposal_acronym, action_type,
               overall_threshold, criteria_json, submitted_by, submitted_at,
-              payload_path, persist, progress_msg, progress_frac
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              payload_path, persist, progress_msg, progress_frac,
+              chat_model, embed_model
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_id,
@@ -154,6 +164,8 @@ def enqueue(
                 1 if persist else 0,
                 "Waiting in queue…",
                 0.0,
+                chat_model,
+                embed_model,
             ),
         )
     return job_id

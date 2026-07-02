@@ -16,7 +16,7 @@ import traceback
 import ollama
 
 from . import db, jobs
-from .config import CHAT_MODEL, OLLAMA_BASE_URL
+from .config import CHAT_MODEL, EMBED_MODEL, OLLAMA_BASE_URL
 from .pipeline import evaluate_proposal
 
 
@@ -24,13 +24,22 @@ _thread: threading.Thread | None = None
 _thread_lock = threading.Lock()
 _POLL_INTERVAL_S = 1.0
 
+# Tracks whichever chat model the most recent job actually used, so the
+# idle-unload below evicts the right one — jobs can override the config
+# default via a per-job model selection in the UI.
+_last_chat_model: str = CHAT_MODEL
+
 
 class _JobCancelled(Exception):
     """Raised inside the progress callback to abort a running job."""
 
 
 def _process_one(job: dict) -> None:
+    global _last_chat_model
     job_id: str = job["job_id"]
+    chat_model = job.get("chat_model") or CHAT_MODEL
+    embed_model = job.get("embed_model") or EMBED_MODEL
+    _last_chat_model = chat_model
 
     def _progress(message: str, fraction: float) -> None:
         try:
@@ -61,6 +70,8 @@ def _process_one(job: dict) -> None:
             chunk_index=None,
             progress_cb=_progress,
             persist=bool(job["persist"]),
+            chat_model=chat_model,
+            embed_model=embed_model,
         )
     except _JobCancelled:
         jobs.mark_failed(job_id, "Cancelled by user.")
@@ -90,7 +101,7 @@ def _unload_chat_model() -> bool:
     Returns whether the request succeeded, so callers can retry on failure.
     """
     try:
-        ollama.Client(host=OLLAMA_BASE_URL).generate(model=CHAT_MODEL, keep_alive=0)
+        ollama.Client(host=OLLAMA_BASE_URL).generate(model=_last_chat_model, keep_alive=0)
         return True
     except Exception:
         return False

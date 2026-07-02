@@ -40,3 +40,8 @@ NUM_GPU: int = int(os.environ.get("EDF_NUM_GPU", "99"))
 # NUM_GPU: int = 0
 # GPU device index to use (0 = first GPU, e.g. RTX 5070).
 MAIN_GPU: int = int(os.environ.get("EDF_MAIN_GPU", "0"))
+
+# Ollama context window (tokens). Actual prompts here are small (~2-2.5k
+# tokens worst case); capping this avoids Ollama's auto-sizing (observed
+# defaulting to 262144) wasting VRAM/time on an oversized KV-cache.
+NUM_CTX: int = int(os.environ.get("EDF_NUM_CTX", "8192"))

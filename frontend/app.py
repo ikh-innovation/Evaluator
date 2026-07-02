@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import io
@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import ollama
 import streamlit as st
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,6 +123,7 @@ if not st.session_state.get("authed_username"):
     _username = auth.get_username(_sid) if _sid else None
     if _username:
         st.session_state.authed_username = _username
+        st.session_state.authed_sid = _sid
     else:
         st.title("EDF Proposal Evaluator")
         st.warning("Please log in first.")
@@ -132,8 +134,8 @@ if not st.session_state.get("authed_username"):
         _login_url = auth.peer_url(_host_header, AUTH_PORT)
         st.markdown(
             f'<a href="{_login_url}" target="_self" '
-            'style="display:inline-block;padding:.5rem 1rem;border-radius:8px;'
-            'background:#dc2626;color:#fff;text-decoration:none;font-weight:600;">'
+            'style="display:inline-block;padding:.5rem 1rem;border:1px solid #000;'
+            'background:#000;color:#fff;text-decoration:none;font-weight:600;">'
             "Go to login →</a>",
             unsafe_allow_html=True,
         )
@@ -145,72 +147,102 @@ if not st.session_state.get("authed_username"):
 
 st.markdown("""
 <style>
+/* ── Brutalist palette: white/black/gray only. Red is reserved for errors
+   and destructive actions (Wipe history, Delete this run) — nothing else. ── */
 button[data-testid="stBaseButton-primary"] {
     background-color: #dc2626 !important;
-    border-color: #dc2626 !important;
+    border: 1px solid #dc2626 !important;
+    border-radius: 0 !important;
     color: #fff !important;
+    box-shadow: none !important;
 }
 button[data-testid="stBaseButton-primary"]:hover {
-    background-color: #b91c1c !important;
-    border-color: #b91c1c !important;
+    background-color: #991b1b !important;
+    border-color: #991b1b !important;
 }
 button[data-testid="stBaseButton-primary"]:disabled {
-    background-color: #9ca3af !important;
-    border-color: #9ca3af !important;
-    color: #e5e7eb !important;
+    background-color: #d4d4d4 !important;
+    border-color: #d4d4d4 !important;
+    color: #737373 !important;
+}
+/* The main non-destructive CTA ("Queue evaluation"): solid black, marked via
+   an adjacent invisible span since Streamlit gives buttons no other stable,
+   CSS-selectable hook — same :has()-on-column technique used below for the
+   queue-bar chip/× color-linking. */
+[data-testid="stColumn"]:has(.edf-cta-marker) button[data-testid="stBaseButton-secondary"] {
+    background: #000 !important;
+    color: #fff !important;
+    border-color: #000 !important;
+}
+[data-testid="stColumn"]:has(.edf-cta-marker) button[data-testid="stBaseButton-secondary"]:hover {
+    background: #262626 !important;
+}
+[data-testid="stColumn"]:has(.edf-cta-marker) button[data-testid="stBaseButton-secondary"]:disabled {
+    background: #d4d4d4 !important;
+    color: #737373 !important;
+    border-color: #d4d4d4 !important;
 }
 
 /* ── Queue status bar ─────────────────────────────────────────────────── */
+/* Fixed to the bottom of the viewport with margin on all sides, so it reads
+   as a distinct floating panel rather than sitting flush under the page
+   content — same white/black palette as the rest of the site, no inversion.
+   stMain (the content area, excluding the sidebar) is made the containing
+   block for our fixed elements via a no-op transform, so left/right below
+   are relative to the content area only — never hidden under the sidebar,
+   and correct even when the sidebar is resized or collapsed. */
+[data-testid="stAppViewContainer"] .block-container {
+    padding-bottom: 7rem !important;
+}
+[data-testid="stMain"] {
+    transform: translateZ(0);
+}
 .edf-queue-bar {
+    position: fixed;
+    left: 1.25rem;
+    right: 1.25rem;
+    bottom: 1.25rem;
+    z-index: 999;
     display: flex;
     align-items: center;
     gap: .9rem;
-    width: 100%;
-    padding: .55rem 1rem;
-    border: 1px solid #e5e7eb;
-    background: linear-gradient(90deg, #f8fafc 0%, #f1f5f9 100%);
+    padding: .6rem 1rem;
+    border: 1px solid #000;
+    background: #ffffff;
     font-size: .92rem;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, .05);
 }
 .edf-queue-bar.idle {
-    border-radius: 10px;
-    margin: 0 0 .8rem 0;
-    color: #475569;
+    color: #525252;
+    border-color: #d4d4d4;
 }
 .edf-queue-bar.busy {
-    border-radius: 10px 10px 0 0;
     border-bottom: none;
-    background: linear-gradient(90deg, #fef3c7 0%, #fde68a 100%);
-    border-color: #fcd34d;
-    color: #78350f;
+    color: #000;
 }
 .edf-queue-bar .dot {
     width: 10px; height: 10px; border-radius: 50%;
-    background: #94a3b8; flex-shrink: 0;
+    border: 2px solid #000; background: transparent; flex-shrink: 0;
 }
 .edf-queue-bar.busy .dot {
-    background: #f59e0b;
-    box-shadow: 0 0 0 0 rgba(245, 158, 11, .6);
-    animation: edf-pulse 1.4s infinite;
-}
-@keyframes edf-pulse {
-    0%   { box-shadow: 0 0 0 0   rgba(245, 158, 11, .55); }
-    70%  { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0);  }
-    100% { box-shadow: 0 0 0 0   rgba(245, 158, 11, 0);   }
+    background: #000;
 }
 .edf-queue-bar .summary  { font-weight: 700; white-space: nowrap; }
-.edf-queue-bar .msg      { color: #78350f; font-size: .82rem; opacity: .85;
+.edf-queue-bar .msg      { color: #525252; font-size: .82rem;
                             flex: 1; min-width: 0;
                             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .edf-queue-bar .progress { height: 6px; flex: 0 0 160px; max-width: 28%;
-                            background: rgba(255, 255, 255, .55);
-                            border-radius: 4px; overflow: hidden; }
+                            background: #e5e5e5; overflow: hidden; }
 .edf-queue-bar .progress > div {
-    height: 100%; background: #f59e0b; transition: width .4s ease;
+    height: 100%; background: #000; transition: width .4s ease;
 }
 
-/* ── Sliding chip strip (the row immediately below the bar header) ────── */
+/* ── Sliding chip strip — fixed directly above the bar, same width/offset. */
 [data-testid="stHorizontalBlock"]:has(.qbar-chip) {
+    position: fixed !important;
+    left: 1.25rem !important;
+    right: 1.25rem !important;
+    bottom: 4rem !important;
+    z-index: 999 !important;
     flex-wrap: nowrap !important;
     overflow-x: auto;
     overflow-y: visible;
@@ -218,18 +250,15 @@ button[data-testid="stBaseButton-primary"]:disabled {
     align-items: center !important;
     gap: .55rem !important;
     padding: .6rem .9rem .7rem .9rem;
-    margin: 0 0 .8rem 0;
-    background: linear-gradient(90deg, #fef3c7 0%, #fde68a 100%);
-    border: 1px solid #fcd34d;
-    border-top: 1px dashed rgba(252, 211, 77, .55);
-    border-radius: 0 0 10px 10px;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, .05);
+    background: #f5f5f5;
+    border: 1px solid #000;
+    border-top: 1px dashed #a3a3a3;
     scrollbar-width: thin;
-    scrollbar-color: #d97706 rgba(255, 255, 255, .25);
+    scrollbar-color: #000 #e5e5e5;
 }
 [data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar { height: 6px; }
-[data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar-track { background: rgba(255,255,255,.25); border-radius: 4px; }
-[data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar-thumb { background: #d97706; border-radius: 4px; }
+[data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar-track { background: #e5e5e5; }
+[data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar-thumb { background: #000; }
 
 /* Each column = one (chip + ×) pair. Shrinks to content; kids in a single
    horizontal row with zero gap so the chip and × visually become one pill. */
@@ -284,25 +313,23 @@ button[data-testid="stBaseButton-primary"]:disabled {
     gap: .4rem;
     height: 2rem;
     padding: 0 .55rem 0 .85rem;
-    border: 1px solid #e5e7eb;
+    border: 1px solid #000;
     border-right: none;
-    border-radius: 8px 0 0 8px;
     background: #ffffff;
-    color: #334155;
+    color: #000;
     font-size: .88rem;
     line-height: 1;
     white-space: nowrap;
-    box-shadow: 0 1px 0 rgba(15, 23, 42, .04);
 }
-.qbar-chip.running   { border-color: #fcd34d; background: #fffbeb; color: #92400e; }
-.qbar-chip.mine      { border-color: #93c5fd; background: #eff6ff; color: #1e40af; }
-.qbar-chip.cancelling{ border-color: #cbd5e1; background: #f1f5f9; color: #64748b;
+.qbar-chip.running   { background: #000; color: #fff; }
+.qbar-chip.mine      { font-weight: 700; }
+.qbar-chip.cancelling{ border-color: #a3a3a3; background: #f5f5f5; color: #737373;
                         text-decoration: line-through; opacity: .7; }
 .qbar-chip code      { background: transparent; padding: 0; color: inherit; font-size: .8rem; opacity: .75; }
-.qbar-submitter      { font-size: .75rem; opacity: .65; font-style: italic; margin-left: .15rem; }
+.qbar-submitter      { font-size: .75rem; opacity: .7; font-style: italic; margin-left: .15rem; }
 
 /* ── The × — right half of the same pill. Matches the chip's height,
-   border, and background; just the rounded corners flip to the right. */
+   border, and background; no rounded corners under the brutalist palette. */
 [data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button {
     height: 2rem !important;
     min-height: 2rem !important;
@@ -312,13 +339,12 @@ button[data-testid="stBaseButton-primary"]:disabled {
     line-height: 1 !important;
     font-size: .85rem !important;
     font-weight: 500 !important;
-    border: 1px solid #e5e7eb !important;
+    border: 1px solid #000 !important;
     border-left: none !important;
-    border-radius: 0 8px 8px 0 !important;
     background: #ffffff !important;
-    color: #94a3b8 !important;
+    color: #000 !important;
     cursor: pointer;
-    box-shadow: 0 1px 0 rgba(15, 23, 42, .04) !important;
+    box-shadow: none !important;
     transition: color .12s, background-color .12s, border-color .12s;
 }
 /* The button's internal <p> wraps the "✕" label — flatten it. */
@@ -334,26 +360,21 @@ button[data-testid="stBaseButton-primary"]:disabled {
 
 /* Variant colors flow from the chip to the × via :has() on the column. */
 [data-testid="stColumn"]:has(.qbar-chip.running) [data-testid="stButton"] > button {
-    background: #fffbeb !important;
-    border-color: #fcd34d !important;
-    color: #b45309 !important;
-}
-[data-testid="stColumn"]:has(.qbar-chip.mine) [data-testid="stButton"] > button {
-    background: #eff6ff !important;
-    border-color: #93c5fd !important;
-    color: #3b82f6 !important;
+    background: #000 !important;
+    border-color: #000 !important;
+    color: #fff !important;
 }
 
-/* Hover — only the × box changes, never the chip. Subtle pink tint. */
+/* Hover — only the × box changes, never the chip. Reserved destructive red. */
 [data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button:hover {
-    color: #dc2626 !important;
-    background: #fee2e2 !important;
-    border-color: #fca5a5 !important;
+    color: #fff !important;
+    background: #dc2626 !important;
+    border-color: #dc2626 !important;
 }
 [data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button:focus,
 [data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button:active {
     outline: none !important;
-    box-shadow: 0 1px 0 rgba(15, 23, 42, .04) !important;
+    box-shadow: none !important;
 }
 
 /* Cancelling: a static "…" pill stamped on the right, same dimensions. */
@@ -363,14 +384,12 @@ button[data-testid="stBaseButton-primary"]:disabled {
     justify-content: center;
     width: 1.55rem;
     height: 2rem;
-    border: 1px solid #cbd5e1;
+    border: 1px solid #a3a3a3;
     border-left: none;
-    border-radius: 0 8px 8px 0;
-    background: #f1f5f9;
-    color: #64748b;
+    background: #f5f5f5;
+    color: #737373;
     font-size: .85rem;
     opacity: .85;
-    box-shadow: 0 1px 0 rgba(15, 23, 42, .04);
 }
 .qbar-cancel-locked {
     display: inline-flex;
@@ -378,11 +397,10 @@ button[data-testid="stBaseButton-primary"]:disabled {
     justify-content: center;
     width: 1.55rem;
     height: 2rem;
-    border: 1px solid #cbd5e1;
+    border: 1px solid #a3a3a3;
     border-left: none;
-    border-radius: 0 8px 8px 0;
-    background: #f8fafc;
-    color: #94a3b8;
+    background: #f5f5f5;
+    color: #737373;
     font-size: .78rem;
     opacity: .7;
 }
@@ -399,6 +417,8 @@ _DEFAULTS: dict[str, Any] = {
     "call_id": "",
     "proposal_acronym": "",
     "submitted_by": "",
+    "selected_chat_model": CHAT_MODEL,
+    "selected_embed_model": EMBED_MODEL,
     # Upload (raw bytes — worker handles extraction / embedding)
     "embedded_key": None,
     "proposal_bytes": None,
@@ -424,6 +444,8 @@ if st.session_state.session_id is None:
 if not st.session_state.submitted_by:
     st.session_state.submitted_by = st.session_state.authed_username
 
+is_admin = st.session_state.authed_username.strip().lower() == "admin"
+
 if st.session_state.criteria is None:
     st.session_state.criteria = [Criterion(**c) for c in DEFAULT_RESEARCH_CRITERIA]
 
@@ -439,10 +461,44 @@ def _criterion_dicts() -> list[dict[str, Any]]:
     ]
 
 
-def _score_color(score: float, max_score: float = 5.0) -> str:
-    r = score / max_score if max_score else 0.0
-    return "green" if r >= 0.7 else ("orange" if r >= 0.5 else "red")
+def _param_count_b(size_str: str | None) -> float:
+    """Parse '30.5B' / '137M' into a billions-of-params float, for sorting."""
+    if not size_str:
+        return 0.0
+    s = size_str.strip().upper()
+    try:
+        if s.endswith("B"):
+            return float(s[:-1])
+        if s.endswith("M"):
+            return float(s[:-1]) / 1000.0
+        if s.endswith("K"):
+            return float(s[:-1]) / 1_000_000.0
+        return float(s)
+    except ValueError:
+        return 0.0
 
+
+@st.cache_data(ttl=60)
+def _list_models() -> tuple[list[str], list[str]]:
+    """Locally pulled Ollama chat models and embedding models, each sorted
+    most billions of parameters to least."""
+    try:
+        client = ollama.Client(host=OLLAMA_BASE_URL)
+        pulled = client.list().models
+    except Exception:
+        return [], []
+    chat: list[tuple[float, str]] = []
+    embed: list[tuple[float, str]] = []
+    for m in pulled:
+        size_b = _param_count_b(m.details.parameter_size if m.details else None)
+        try:
+            caps = client.show(m.model).capabilities or []
+        except Exception:
+            caps = []
+        (embed if "embedding" in caps else chat).append((size_b, m.model))
+    chat.sort(key=lambda t: -t[0])
+    embed.sort(key=lambda t: -t[0])
+    return [n for _, n in chat], [n for _, n in embed]
 
 
 def _run_to_csv(run: dict[str, Any]) -> bytes:
@@ -477,9 +533,6 @@ def _render_criterion_card(c: dict) -> None:
     score = c["score"]
     weight = c["weight"]
     max_score = c.get("max_score", 5.0)
-    color = _score_color(score, max_score)
-    color_hex = {"green": "#166534", "orange": "#92400e", "red": "#991b1b"}[color]
-    bg_hex = {"green": "#dcfce7", "orange": "#fef3c7", "red": "#fee2e2"}[color]
 
     head = st.columns([5, 1, 1, 1])
     with head[0]:
@@ -487,8 +540,8 @@ def _render_criterion_card(c: dict) -> None:
         st.caption(f"Confidence: {c.get('confidence', '—').title()}")
     head[1].markdown(
         f"<small>Score</small><br>"
-        f"<span style='background:{bg_hex};color:{color_hex};font-weight:700;"
-        f"padding:.2rem .5rem;border-radius:6px'>{score:g} / {max_score:g}</span>",
+        f"<span style='border:1px solid #000;font-weight:700;"
+        f"padding:.2rem .5rem;'>{score:g} / {max_score:g}</span>",
         unsafe_allow_html=True,
     )
     head[2].markdown(f"<small>Weight</small><br><b>×{weight:g}</b>", unsafe_allow_html=True)
@@ -581,27 +634,27 @@ def _queue_bar() -> None:
     active = jobs.list_active()
     my_ids = set(st.session_state.my_job_ids)
 
-    promoted = _promote_finished_my_jobs()
+    _promote_finished_my_jobs()  # own job(s): toasts + result panel handled inside
 
     current_ids = {j["job_id"] for j in active}
     known_ids = st.session_state.known_active_ids
     someone_finished = bool(known_ids) and bool(known_ids - current_ids)
     st.session_state.known_active_ids = current_ids
 
-    if promoted or someone_finished:
-        # Force a full app rerun so the result panel and History reflect the new
-        # state, even when the finished job belongs to another user/session.
-        try:
-            st.rerun(scope="app")
-        except TypeError:
-            st.rerun()
+    if someone_finished:
+        # No forced full-app rerun here — that used to race against anyone
+        # actively typing elsewhere on the page and could wipe in-progress
+        # keystrokes. A toast is enough; History/results catch up on the
+        # user's own next natural interaction (db.list_runs() is always
+        # queried fresh whenever that tab/panel renders).
+        st.toast("Another proposal finished processing — History has been updated.", icon="✅")
 
     if not active:
         st.markdown(
             '<div class="edf-queue-bar idle">'
             '<span class="dot"></span>'
             '<span class="summary">Queue idle</span>'
-            '<span style="color:#64748b">No proposals being processed.</span>'
+            '<span style="color:#525252">No proposals being processed.</span>'
             "</div>",
             unsafe_allow_html=True,
         )
@@ -730,9 +783,12 @@ def wipe_db_dialog() -> None:
             st.rerun()
     with cols[1]:
         if st.button("Wipe everything", type="primary", use_container_width=True):
-            removed = db.wipe_all()
-            st.success(f"Removed {removed} run(s).")
-            st.rerun()
+            try:
+                removed = db.wipe_all(requested_by=st.session_state.authed_username)
+                st.success(f"Removed {removed} run(s).")
+                st.rerun()
+            except db.NotAuthorizedError as exc:
+                st.error(str(exc))
 
 
 def _render_run_details(run: dict[str, Any]) -> None:
@@ -767,14 +823,18 @@ def _render_run_details(run: dict[str, Any]) -> None:
                            file_name=f"evaluation_{run.get('call_id', 'edf')}.json",
                            mime="application/json", use_container_width=True)
     with act[2]:
-        if st.button("Delete this run", type="secondary", use_container_width=True):
-            db.delete_run(run.get("call_id", ""))
-            st.session_state.pending_dialog = "history"
-            st.rerun()
+        if is_admin:
+            if st.button("Delete this run", type="primary", use_container_width=True):
+                try:
+                    db.delete_run(run.get("call_id", ""), requested_by=st.session_state.authed_username)
+                    st.rerun()
+                except db.NotAuthorizedError as exc:
+                    st.error(str(exc))
+        else:
+            st.caption("Only the admin user can delete runs.")
 
 
-@st.dialog("History of past runs", width="large")
-def history_dialog() -> None:
+def history_tab() -> None:
     all_runs = db.list_runs()
     if not all_runs:
         st.info("No runs saved yet.")
@@ -815,11 +875,9 @@ def run_detail_dialog(call_id: str) -> None:
     if run is None:
         st.error("Run no longer exists.")
         if st.button("Back to history", use_container_width=True):
-            st.session_state.pending_dialog = "history"
             st.rerun()
         return
     if st.button("Back to history", use_container_width=True):
-        st.session_state.pending_dialog = "history"
         st.rerun()
     st.divider()
     _render_run_details(run)
@@ -831,23 +889,18 @@ def run_detail_dialog(call_id: str) -> None:
 
 _pending = st.session_state.pending_dialog
 st.session_state.pending_dialog = None
-if _pending == "history":
-    history_dialog()
-elif _pending == "detail" and st.session_state.detail_call_id:
+if _pending == "detail" and st.session_state.detail_call_id:
     run_detail_dialog(st.session_state.detail_call_id)
-
-# ---------------------------------------------------------------------------
-# Top queue bar (full width, auto-refreshing)
-# ---------------------------------------------------------------------------
-
-_queue_bar()
 
 # ---------------------------------------------------------------------------
 # Header
 # ---------------------------------------------------------------------------
 
 st.title("EDF Proposal Evaluator")
-st.caption(f"LLM Model =`{CHAT_MODEL}` · Embeddings Model=`{EMBED_MODEL}`")
+st.caption(
+    f"LLM Model =`{st.session_state.selected_chat_model}` · "
+    f"Embeddings Model=`{st.session_state.selected_embed_model}`"
+)
 
 # ---------------------------------------------------------------------------
 # Sidebar — always editable. Edits apply to the *next* submission; jobs
@@ -856,6 +909,35 @@ st.caption(f"LLM Model =`{CHAT_MODEL}` · Embeddings Model=`{EMBED_MODEL}`")
 
 with st.sidebar:
     st.image(str(Path(__file__).parent / "ikh_logo.png"), width=220)
+
+    _acct_cols = st.columns([3, 1])
+    _acct_cols[0].caption(f"**{st.session_state.authed_username}**")
+    if _acct_cols[1].button("Log out", use_container_width=True):
+        auth.revoke_session(st.session_state.get("authed_sid"))
+        st.session_state.authed_username = None
+        st.session_state.authed_sid = None
+        st.session_state.submitted_by = ""
+        st.query_params.clear()
+        st.rerun()
+
+    st.divider()
+    _chat_options, _embed_options = _list_models()
+    if st.session_state.selected_chat_model not in _chat_options:
+        _chat_options = [st.session_state.selected_chat_model] + _chat_options
+    if st.session_state.selected_embed_model not in _embed_options:
+        _embed_options = [st.session_state.selected_embed_model] + _embed_options
+    _model_cols = st.columns(2)
+    with _model_cols[0]:
+        st.session_state.selected_chat_model = st.selectbox(
+            "Chat model", _chat_options,
+            index=_chat_options.index(st.session_state.selected_chat_model),
+        )
+    with _model_cols[1]:
+        st.session_state.selected_embed_model = st.selectbox(
+            "Embedding model", _embed_options,
+            index=_embed_options.index(st.session_state.selected_embed_model),
+        )
+
     st.header("Call configuration")
     st.session_state.call_id = st.text_input(
         "Call ID *", value=st.session_state.call_id,
@@ -868,12 +950,6 @@ with st.sidebar:
     new_action = st.selectbox(
         "Action type", ["Research", "Development"],
         index=0 if st.session_state.action_type == "Research" else 1,
-    )
-    st.text_input(
-        "Submitted by",
-        value=st.session_state.submitted_by,
-        disabled=True,
-        help="Your logged-in username. Shown in the shared queue so others know whose job is running.",
     )
     if new_action != st.session_state.action_type:
         st.session_state.action_type = new_action
@@ -923,18 +999,12 @@ with st.sidebar:
         value=OVERALL_THRESHOLD_DEFAULT, step=0.5,
     )
 
-    st.divider()
-    runs_count = len(db.list_runs())
-    if st.button(
-        f"History ({runs_count} run{'s' if runs_count != 1 else ''})" if runs_count else "History",
-        use_container_width=True, disabled=runs_count == 0,
-    ):
-        st.session_state.pending_dialog = "history"
-        st.session_state.detail_call_id = None
-        st.rerun()
-    if runs_count:
-        if st.button("Wipe history", type="secondary", use_container_width=True):
-            wipe_db_dialog()
+    if is_admin:
+        st.divider()
+        runs_count = len(db.list_runs())
+        if runs_count:
+            if st.button("Wipe history", type="primary", use_container_width=True):
+                wipe_db_dialog()
 
     if st.session_state.my_job_ids:
         st.divider()
@@ -951,179 +1021,195 @@ with st.sidebar:
 # proposal, all while one is being processed.
 # ---------------------------------------------------------------------------
 
-st.subheader("1. Upload Part B")
+tab_evaluate, tab_history = st.tabs(["Evaluate", "History"])
 
-pasted = st.text_area(
-    "Paste sections directly (not saved to history)",
-    placeholder="Paste a section of Part B here…",
-    height=120,
-    key=f"pasted_{st.session_state.upload_nonce}",
-)
+with tab_evaluate:
+    st.subheader("1. Upload Part B")
 
-uploaded = st.file_uploader(
-    "Or upload the full proposal (DOCX recommended; PDF / TXT accepted)",
-    type=["docx", "pdf", "txt", "md"],
-    accept_multiple_files=False,
-    key=f"uploaded_{st.session_state.upload_nonce}",
-)
+    pasted = st.text_area(
+        "Paste sections directly (not saved to history)",
+        placeholder="Paste a section of Part B here…",
+        height=120,
+        key=f"pasted_{st.session_state.upload_nonce}",
+    )
 
-# ── Stash uploaded bytes; the worker handles extraction/chunking/embedding ─
-has_content = False
+    uploaded = st.file_uploader(
+        "Or upload the full proposal (DOCX recommended; PDF / TXT accepted)",
+        type=["docx", "pdf", "txt", "md"],
+        accept_multiple_files=False,
+        key=f"uploaded_{st.session_state.upload_nonce}",
+    )
 
-if uploaded and not pasted.strip():
-    new_key = f"{uploaded.name}:{uploaded.size}"
-    if st.session_state.embedded_key != new_key:
-        st.session_state.embedded_key = new_key
-        st.session_state.proposal_bytes = uploaded.getvalue()
-        st.session_state.proposal_suffix = (
-            ("." + uploaded.name.rsplit(".", 1)[-1]).lower() if "." in uploaded.name else ""
-        )
-    if st.session_state.proposal_bytes:
-        size_kb = len(st.session_state.proposal_bytes) / 1024
-        st.info(
-            f"📎 Ready to queue: **{uploaded.name}** "
-            f"({size_kb:.1f} KB). Text extraction and embedding will run on the worker after you press *Queue evaluation*.",
-            icon="📎",
-        )
+    # ── Stash uploaded bytes; the worker handles extraction/chunking/embedding ─
+    has_content = False
+
+    if uploaded and not pasted.strip():
+        new_key = f"{uploaded.name}:{uploaded.size}"
+        if st.session_state.embedded_key != new_key:
+            st.session_state.embedded_key = new_key
+            st.session_state.proposal_bytes = uploaded.getvalue()
+            st.session_state.proposal_suffix = (
+                ("." + uploaded.name.rsplit(".", 1)[-1]).lower() if "." in uploaded.name else ""
+            )
+        if st.session_state.proposal_bytes:
+            size_kb = len(st.session_state.proposal_bytes) / 1024
+            st.info(
+                f"📎 Ready to queue: **{uploaded.name}** "
+                f"({size_kb:.1f} KB). Text extraction and embedding will run on the worker after you press *Queue evaluation*.",
+                icon="📎",
+            )
+            has_content = True
+
+    elif pasted.strip():
         has_content = True
 
-elif pasted.strip():
-    has_content = True
-
-# ── Config summary + Run button ────────────────────────────────────────────
-st.subheader("2. Configuration")
-total_weight = sum(c.weight for c in st.session_state.criteria)
-max_total = sum(c.weight * c.max_score for c in st.session_state.criteria)
-threshold_ratio = overall_threshold / max_total if max_total else 0.0
-
-with st.container(border=True):
-    cols = st.columns([2, 1, 1, 1, 1])
-    cols[0].markdown(
-        f"<small>Proposal · Call</small><br>"
-        f"<b>{st.session_state.proposal_acronym or '—'}</b>  `{st.session_state.call_id or '—'}`",
-        unsafe_allow_html=True,
-    )
-    cols[1].markdown(f"<small>Action</small><br><b>{st.session_state.action_type}</b>", unsafe_allow_html=True)
-    cols[2].markdown(f"<small>Criteria</small><br><b>{len(st.session_state.criteria)}</b>", unsafe_allow_html=True)
-    cols[3].markdown(f"<small>Max score</small><br><b>{max_total:g}</b>", unsafe_allow_html=True)
-    cols[4].markdown(
-        f"<small>Threshold</small><br><b>{overall_threshold:g}</b> · {threshold_ratio * 100:.0f}%",
-        unsafe_allow_html=True,
-    )
-
-run_cols = st.columns([3, 2, 3])
-with run_cols[1]:
-    run_clicked = st.button(
-        "Queue evaluation",
-        type="primary",
-        disabled=not has_content,
-        use_container_width=True,
-        key="run_eval_btn",
-    )
-
-
-def _validate() -> list[str]:
-    errors: list[str] = []
-    if not st.session_state.call_id.strip():
-        errors.append("Call ID is required.")
-    if not st.session_state.proposal_acronym.strip():
-        errors.append("Proposal acronym is required.")
-    if not st.session_state.submitted_by.strip():
-        errors.append("Submitted by is required.")
-    if not st.session_state.criteria:
-        errors.append("At least one criterion is required.")
-    return errors
-
-
-if run_clicked:
-    errors = _validate()
-    if errors:
-        for e in errors:
-            st.error(e)
-    else:
-        is_full_proposal = uploaded is not None and not pasted.strip()
-        proposal_bytes_for_job = st.session_state.proposal_bytes if is_full_proposal else None
-        suffix_for_job = st.session_state.proposal_suffix if is_full_proposal else None
-        pasted_for_job = pasted.strip() if pasted.strip() else None
-
-        try:
-            job_id = jobs.enqueue(
-                call_id=st.session_state.call_id.strip(),
-                proposal_acronym=st.session_state.proposal_acronym.strip(),
-                action_type=st.session_state.action_type,
-                overall_threshold=float(overall_threshold),
-                criteria=_criterion_dicts(),
-                proposal_bytes=proposal_bytes_for_job,
-                proposal_suffix=suffix_for_job,
-                pasted_text=pasted_for_job,
-                persist=is_full_proposal,
-                submitted_by=st.session_state.submitted_by.strip(),
-            )
-            st.session_state.my_job_ids = list(st.session_state.my_job_ids) + [job_id]
-            st.toast(
-                f"Queued '{st.session_state.proposal_acronym.strip()}' "
-                f"({'pasted text — not saved to history' if not is_full_proposal else 'saved to history when done'})",
-                icon="📥",
-            )
-            # Reset the proposal-scoped fields for the next submission; Call ID,
-            # Action type, criteria/weights, threshold and Submitted by carry over.
-            st.session_state.proposal_acronym = ""
-            st.session_state.embedded_key = None
-            st.session_state.proposal_bytes = None
-            st.session_state.proposal_suffix = None
-            st.session_state.upload_nonce += 1
-            st.rerun()
-        except Exception as exc:
-            st.error(f"Could not queue evaluation: {exc}")
-
-# ── Latest result for this session ─────────────────────────────────────────
-result = st.session_state.result
-if result:
-    st.divider()
-    st.header("Evaluation result")
-
-    weighted = result.get("weighted_total", 0.0)
-    max_weighted = result.get("max_weighted_total", 1.0) or 1.0
-    threshold = result.get("overall_threshold")
-    passed = (threshold is None) or (weighted >= threshold)
-    band = result.get("predicted_band", "—")
-    score_pct = (weighted / max_weighted) * 100 if max_weighted else 0.0
+    # ── Config summary + Run button ────────────────────────────────────────────
+    st.subheader("2. Configuration")
+    total_weight = sum(c.weight for c in st.session_state.criteria)
+    max_total = sum(c.weight * c.max_score for c in st.session_state.criteria)
+    threshold_ratio = overall_threshold / max_total if max_total else 0.0
 
     with st.container(border=True):
-        cols = st.columns(4)
-        cols[0].metric("Weighted total", f"{weighted:g}", f"/ {max_weighted:g}")
-        cols[1].metric("Threshold", f"{threshold:g}" if threshold is not None else "—")
-        cols[2].metric("Pass / Fail", "PASS" if passed else "FAIL",
-                       delta=f"{'+' if passed else '−'}{abs(weighted - (threshold or 0)):g}",
-                       delta_color="normal" if passed else "inverse")
-        cols[3].metric("Predicted band", band)
-        st.progress(min(weighted / max_weighted, 1.0), text=f"{score_pct:.1f}% of max")
-        st.caption(
-            f"{result.get('proposal_acronym', '—')} · `{result.get('call_id', '—')}` · "
-            f"{result.get('action_type', '—')} · Confidence: {result.get('overall_confidence', '—')}"
+        cols = st.columns([2, 1, 1, 1, 1])
+        cols[0].markdown(
+            f"<small>Proposal · Call</small><br>"
+            f"<b>{st.session_state.proposal_acronym or '—'}</b>  `{st.session_state.call_id or '—'}`",
+            unsafe_allow_html=True,
+        )
+        cols[1].markdown(f"<small>Action</small><br><b>{st.session_state.action_type}</b>", unsafe_allow_html=True)
+        cols[2].markdown(f"<small>Criteria</small><br><b>{len(st.session_state.criteria)}</b>", unsafe_allow_html=True)
+        cols[3].markdown(f"<small>Max score</small><br><b>{max_total:g}</b>", unsafe_allow_html=True)
+        cols[4].markdown(
+            f"<small>Threshold</small><br><b>{overall_threshold:g}</b> · {threshold_ratio * 100:.0f}%",
+            unsafe_allow_html=True,
         )
 
-    with st.container(border=True):
-        st.markdown("##### ESR-style summary")
-        st.write(result.get("esr_style_summary", "—"))
+    run_cols = st.columns([3, 2, 3])
+    with run_cols[1]:
+        st.markdown('<span class="edf-cta-marker"></span>', unsafe_allow_html=True)
+        run_clicked = st.button(
+            "Queue evaluation",
+            type="secondary",
+            disabled=not has_content,
+            use_container_width=True,
+            key="run_eval_btn",
+        )
 
-    st.markdown("##### Per-criterion breakdown")
-    for c in result.get("criteria", []):
+
+    def _validate() -> list[str]:
+        errors: list[str] = []
+        if not st.session_state.call_id.strip():
+            errors.append("Call ID is required.")
+        if not st.session_state.proposal_acronym.strip():
+            errors.append("Proposal acronym is required.")
+        if not st.session_state.submitted_by.strip():
+            errors.append("Submitted by is required.")
+        if not st.session_state.criteria:
+            errors.append("At least one criterion is required.")
+        return errors
+
+
+    if run_clicked:
+        errors = _validate()
+        if errors:
+            for e in errors:
+                st.error(e)
+        else:
+            is_full_proposal = uploaded is not None and not pasted.strip()
+            proposal_bytes_for_job = st.session_state.proposal_bytes if is_full_proposal else None
+            suffix_for_job = st.session_state.proposal_suffix if is_full_proposal else None
+            pasted_for_job = pasted.strip() if pasted.strip() else None
+
+            try:
+                job_id = jobs.enqueue(
+                    call_id=st.session_state.call_id.strip(),
+                    proposal_acronym=st.session_state.proposal_acronym.strip(),
+                    action_type=st.session_state.action_type,
+                    overall_threshold=float(overall_threshold),
+                    criteria=_criterion_dicts(),
+                    proposal_bytes=proposal_bytes_for_job,
+                    proposal_suffix=suffix_for_job,
+                    pasted_text=pasted_for_job,
+                    persist=is_full_proposal,
+                    submitted_by=st.session_state.submitted_by.strip(),
+                    chat_model=st.session_state.selected_chat_model,
+                    embed_model=st.session_state.selected_embed_model,
+                )
+                st.session_state.my_job_ids = list(st.session_state.my_job_ids) + [job_id]
+                st.toast(
+                    f"Queued '{st.session_state.proposal_acronym.strip()}' "
+                    f"({'pasted text — not saved to history' if not is_full_proposal else 'saved to history when done'})",
+                    icon="📥",
+                )
+                # Reset the proposal-scoped fields for the next submission; Call ID,
+                # Action type, criteria/weights, threshold and Submitted by carry over.
+                st.session_state.proposal_acronym = ""
+                st.session_state.embedded_key = None
+                st.session_state.proposal_bytes = None
+                st.session_state.proposal_suffix = None
+                st.session_state.upload_nonce += 1
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Could not queue evaluation: {exc}")
+
+    # ── Latest result for this session ─────────────────────────────────────────
+    result = st.session_state.result
+    if result:
+        st.divider()
+        st.header("Evaluation result")
+
+        weighted = result.get("weighted_total", 0.0)
+        max_weighted = result.get("max_weighted_total", 1.0) or 1.0
+        threshold = result.get("overall_threshold")
+        passed = (threshold is None) or (weighted >= threshold)
+        band = result.get("predicted_band", "—")
+        score_pct = (weighted / max_weighted) * 100 if max_weighted else 0.0
+
         with st.container(border=True):
-            _render_criterion_card(c)
+            cols = st.columns(4)
+            cols[0].metric("Weighted total", f"{weighted:g}", f"/ {max_weighted:g}")
+            cols[1].metric("Threshold", f"{threshold:g}" if threshold is not None else "—")
+            cols[2].metric("Pass / Fail", "PASS" if passed else "FAIL",
+                           delta=f"{'+' if passed else '−'}{abs(weighted - (threshold or 0)):g}",
+                           delta_color="normal" if passed else "inverse")
+            cols[3].metric("Predicted band", band)
+            st.progress(min(weighted / max_weighted, 1.0), text=f"{score_pct:.1f}% of max")
+            st.caption(
+                f"{result.get('proposal_acronym', '—')} · `{result.get('call_id', '—')}` · "
+                f"{result.get('action_type', '—')} · Confidence: {result.get('overall_confidence', '—')}"
+            )
 
-    foot = st.columns([1, 1])
-    with foot[0]:
-        st.download_button(
-            "Download JSON",
-            data=json.dumps(result, indent=2).encode("utf-8"),
-            file_name=f"evaluation_{result.get('call_id', 'edf')}.json",
-            mime="application/json", use_container_width=True,
-        )
-    with foot[1]:
-        st.download_button(
-            "Download CSV",
-            data=_run_to_csv(result),
-            file_name=f"evaluation_{result.get('call_id', 'edf')}.csv",
-            mime="text/csv", use_container_width=True,
-        )
+        with st.container(border=True):
+            st.markdown("##### ESR-style summary")
+            st.write(result.get("esr_style_summary", "—"))
+
+        st.markdown("##### Per-criterion breakdown")
+        for c in result.get("criteria", []):
+            with st.container(border=True):
+                _render_criterion_card(c)
+
+        foot = st.columns([1, 1])
+        with foot[0]:
+            st.download_button(
+                "Download JSON",
+                data=json.dumps(result, indent=2).encode("utf-8"),
+                file_name=f"evaluation_{result.get('call_id', 'edf')}.json",
+                mime="application/json", use_container_width=True,
+            )
+        with foot[1]:
+            st.download_button(
+                "Download CSV",
+                data=_run_to_csv(result),
+                file_name=f"evaluation_{result.get('call_id', 'edf')}.csv",
+                mime="text/csv", use_container_width=True,
+            )
+
+with tab_history:
+    history_tab()
+
+# ---------------------------------------------------------------------------
+# Queue status — bottom of page, auto-refreshing.
+# ---------------------------------------------------------------------------
+
+st.divider()
+_queue_bar()

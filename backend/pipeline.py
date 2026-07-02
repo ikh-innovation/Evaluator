@@ -10,9 +10,11 @@ from langchain_ollama import OllamaEmbeddings
 from . import db
 from .chunking import chunk_sections
 from .config import (
+    CHAT_MODEL,
     EMBED_MODEL,
     MAX_PROPOSAL_CHARS_INLINE,
     MAX_WORKERS,
+    NUM_CTX,
     NUM_GPU,
     OLLAMA_BASE_URL,
     PROPOSAL_CHUNK_TOP_K,
@@ -22,14 +24,23 @@ from .ingestion import extract_sections, extract_text
 
 ProgressCb = Callable[[str, float], None]
 
-_embeddings: OllamaEmbeddings | None = None
+# Keyed by model name so a per-job model override (chosen in the UI) doesn't
+# require a restart — each distinct model gets its own cached client.
+_embeddings_cache: dict[str, OllamaEmbeddings] = {}
 
 
-def _embeddings_singleton() -> OllamaEmbeddings:
-    global _embeddings
-    if _embeddings is None:
-        _embeddings = OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_BASE_URL, num_gpu=NUM_GPU)
-    return _embeddings
+def _embeddings_singleton(model: str = EMBED_MODEL) -> OllamaEmbeddings:
+    if model not in _embeddings_cache:
+        # OllamaEmbeddings (langchain-ollama) has no main_gpu field — it
+        # strictly rejects unknown kwargs, unlike ChatOllama. num_gpu/num_ctx
+        # are supported and applied; GPU *device* pinning isn't available for
+        # the embedding model via this client (not needed — CUDA_VISIBLE_DEVICES
+        # on the host restricts Ollama to a single GPU regardless).
+        _embeddings_cache[model] = OllamaEmbeddings(
+            model=model, base_url=OLLAMA_BASE_URL,
+            num_gpu=NUM_GPU, num_ctx=NUM_CTX,
+        )
+    return _embeddings_cache[model]
 
 
 def _embed_with_autosplit(
@@ -74,6 +85,7 @@ def build_proposal_index(
     proposal_bytes: bytes | None,
     proposal_suffix: str | None,
     on_chunk_embedded: Callable[[int, int], None] | None = None,
+    embed_model: str = EMBED_MODEL,
 ) -> dict[str, Any]:
     """Build the (chunks, vectors) embedding index for a proposal.
 
@@ -93,7 +105,7 @@ def build_proposal_index(
     if not chunks:
         return {"chunks": [], "vectors": np.zeros((0, 1)), "parents": []}
 
-    embeddings = _embeddings_singleton()
+    embeddings = _embeddings_singleton(embed_model)
     texts = [c["content"] for c in chunks]
     n = len(texts)
 
@@ -124,6 +136,7 @@ def get_proposal_excerpt(
     index: dict[str, Any],
     criterion_name: str,
     criterion_description: str,
+    embed_model: str = EMBED_MODEL,
 ) -> str:
     """Select the top-K most relevant chunks for a criterion."""
     chunks: list[dict] = index["chunks"]
@@ -132,7 +145,7 @@ def get_proposal_excerpt(
     vectors: np.ndarray = index["vectors"]
     parents: list[int] = index["parents"]
 
-    embeddings = _embeddings_singleton()
+    embeddings = _embeddings_singleton(embed_model)
     query_vec = np.asarray(
         embeddings.embed_query(f"{criterion_name}: {criterion_description}")
     )
@@ -164,11 +177,11 @@ def get_proposal_excerpt(
     return "\n\n".join(blocks)
 
 
-def warmup_llm() -> None:
+def warmup_llm(chat_model: str = CHAT_MODEL) -> None:
     """Load the LLM into memory. Fast no-op if already loaded."""
     from .evaluator import _chat_json_model
     try:
-        _chat_json_model().invoke("warmup")
+        _chat_json_model(chat_model).invoke("warmup")
     except Exception:
         pass
 
@@ -185,6 +198,8 @@ def evaluate_proposal(
     chunk_index: dict[str, Any] | None = None,
     progress_cb: ProgressCb | None = None,
     persist: bool = True,
+    chat_model: str = CHAT_MODEL,
+    embed_model: str = EMBED_MODEL,
 ) -> dict:
     """Full pipeline in one call. Accepts a pre-built chunk_index to skip re-embedding."""
     if chunk_index is not None:
@@ -209,6 +224,7 @@ def evaluate_proposal(
         index = build_proposal_index(
             proposal_text, proposal_bytes, proposal_suffix,
             on_chunk_embedded=_embed_progress,
+            embed_model=embed_model,
         )
         if progress_cb:
             progress_cb(
@@ -218,14 +234,14 @@ def evaluate_proposal(
 
     if progress_cb:
         progress_cb("Loading LLM model — first load takes a few minutes on CPU…", 0.20)
-    warmup_llm()
+    warmup_llm(chat_model)
     if progress_cb:
         progress_cb("LLM ready", 0.25)
 
     if progress_cb:
         progress_cb("Selecting relevant excerpts per criterion…", 0.25)
     excerpts: list[str] = [
-        get_proposal_excerpt(index, crit["name"], crit.get("description", ""))
+        get_proposal_excerpt(index, crit["name"], crit.get("description", ""), embed_model=embed_model)
         for crit in criteria
     ]
     if progress_cb:
@@ -242,6 +258,7 @@ def evaluate_proposal(
             criterion_description=crit.get("description", ""),
             weight=float(crit["weight"]),
             action_type=action_type,
+            chat_model=chat_model,
         )
         completed += 1
         if progress_cb:
@@ -269,11 +286,11 @@ def evaluate_proposal(
 
     if progress_cb:
         progress_cb("Generating ESR-style summary…", 0.88)
-    summary = summarise(results, weighted_total, max_weighted_total, overall_threshold)
+    summary = summarise(results, weighted_total, max_weighted_total, overall_threshold, chat_model=chat_model)
 
     if progress_cb:
         progress_cb("Predicting outcome band…", 0.94)
-    band = predict_band(results, weighted_total, max_weighted_total, overall_threshold)
+    band = predict_band(results, weighted_total, max_weighted_total, overall_threshold, chat_model=chat_model)
 
     confs = [r.get("confidence", "medium") for r in results]
     overall_conf = (

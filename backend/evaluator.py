@@ -10,6 +10,7 @@ from .config import (
     CHAT_MODEL,
     MAIN_GPU,
     MAX_PROPOSAL_CHARS_INLINE,
+    NUM_CTX,
     NUM_GPU,
     OLLAMA_BASE_URL,
     REQUEST_TIMEOUT_S,
@@ -88,15 +89,16 @@ proposal into EXACTLY ONE of these labels:
 Return only the label, nothing else."""
 
 
-_chat_json: ChatOllama | None = None
-_chat_text: ChatOllama | None = None
+# Keyed by model name so a per-job model override (chosen in the UI) doesn't
+# require a restart — each distinct model gets its own cached client.
+_chat_json_cache: dict[str, ChatOllama] = {}
+_chat_text_cache: dict[str, ChatOllama] = {}
 
 
-def _chat_json_model() -> ChatOllama:
-    global _chat_json
-    if _chat_json is None:
-        _chat_json = ChatOllama(
-            model=CHAT_MODEL,
+def _chat_json_model(model: str = CHAT_MODEL) -> ChatOllama:
+    if model not in _chat_json_cache:
+        _chat_json_cache[model] = ChatOllama(
+            model=model,
             base_url=OLLAMA_BASE_URL,
             temperature=0.1,
             format="json",
@@ -104,23 +106,24 @@ def _chat_json_model() -> ChatOllama:
             keep_alive=-1,
             num_gpu=NUM_GPU,
             main_gpu=MAIN_GPU,
+            num_ctx=NUM_CTX,
         )
-    return _chat_json
+    return _chat_json_cache[model]
 
 
-def _chat_text_model() -> ChatOllama:
-    global _chat_text
-    if _chat_text is None:
-        _chat_text = ChatOllama(
-            model=CHAT_MODEL,
+def _chat_text_model(model: str = CHAT_MODEL) -> ChatOllama:
+    if model not in _chat_text_cache:
+        _chat_text_cache[model] = ChatOllama(
+            model=model,
             base_url=OLLAMA_BASE_URL,
             temperature=0.3,
             timeout=REQUEST_TIMEOUT_S,
             keep_alive=-1,
             num_gpu=NUM_GPU,
             main_gpu=MAIN_GPU,
+            num_ctx=NUM_CTX,
         )
-    return _chat_text
+    return _chat_text_cache[model]
 
 
 def _parse_json(text: str) -> dict[str, Any]:
@@ -153,6 +156,7 @@ def evaluate_criterion(
     criterion_description: str,
     weight: float,
     action_type: str,
+    chat_model: str = CHAT_MODEL,
 ) -> dict:
     prompt = EVAL_PROMPT.format(
         rubric=EDF_RUBRIC,
@@ -162,7 +166,7 @@ def evaluate_criterion(
         action_type=action_type,
         proposal_text=proposal_text[:MAX_PROPOSAL_CHARS_INLINE] or "(empty proposal text)",
     )
-    msg = _chat_json_model().invoke(prompt)
+    msg = _chat_json_model(chat_model).invoke(prompt)
     parsed = _parse_json(msg.content)
 
     parsed.setdefault("strengths", [])
@@ -180,6 +184,7 @@ def summarise(
     weighted_total: float,
     max_weighted_total: float,
     threshold: float | None,
+    chat_model: str = CHAT_MODEL,
 ) -> str:
     block = "\n\n".join(
         (
@@ -189,7 +194,7 @@ def summarise(
         )
         for c in per_criterion
     )
-    msg = _chat_text_model().invoke(
+    msg = _chat_text_model(chat_model).invoke(
         SUMMARY_PROMPT.format(
             per_criterion_block=block,
             weighted_total=weighted_total,
@@ -208,8 +213,9 @@ def predict_band(
     weighted_total: float,
     max_weighted_total: float,
     threshold: float | None,
+    chat_model: str = CHAT_MODEL,
 ) -> str:
-    msg = _chat_text_model().invoke(
+    msg = _chat_text_model(chat_model).invoke(
         BAND_PROMPT.format(
             weighted_total=weighted_total,
             max_weighted_total=max_weighted_total,
