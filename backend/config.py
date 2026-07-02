@@ -8,10 +8,21 @@ DATA_DIR: Path = ROOT / "data"
 RUNS_DB_PATH: Path = DATA_DIR / "runs.sqlite"
 INPUT_DOCS_DIR: Path = ROOT / "input_docs"
 
-OLLAMA_BASE_URL: str = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 
-CHAT_MODEL: str = os.environ.get("EDF_CHAT_MODEL", "gemma4:26b")
-EMBED_MODEL: str = os.environ.get("EDF_EMBED_MODEL", "nomic-embed-text")
+def _require_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(
+            f"Missing required environment variable {name!r}. "
+            f"Set it in your .env file (see .env.example)."
+        )
+    return value
+
+
+OLLAMA_BASE_URL: str = _require_env("OLLAMA_BASE_URL")
+
+CHAT_MODEL: str = _require_env("EDF_CHAT_MODEL")
+EMBED_MODEL: str = _require_env("EDF_EMBED_MODEL")
 
 PROPOSAL_CHUNK_TOP_K: int = int(os.environ.get("EDF_PROPOSAL_TOP_K", "4"))
 CHUNK_SIZE_CHARS: int = int(os.environ.get("EDF_CHUNK_SIZE", "1500"))

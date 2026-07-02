@@ -15,9 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend import db, jobs  # noqa: E402
+from backend import auth, db, jobs  # noqa: E402
 from backend.config import CHAT_MODEL, EMBED_MODEL, OLLAMA_BASE_URL  # noqa: E402
 from backend.criteria_io import criteria_to_xlsx_bytes, xlsx_to_criteria  # noqa: E402
+
+AUTH_PORT = 8502
 
 
 DEFAULT_RESEARCH_CRITERIA: list[dict[str, Any]] = [
@@ -110,6 +112,32 @@ st.set_page_config(
     page_icon=":bar_chart:",
     layout="wide",
 )
+
+# ---------------------------------------------------------------------------
+# Login gate — nothing below renders without a valid session from the auth app.
+# ---------------------------------------------------------------------------
+
+if not st.session_state.get("authed_username"):
+    _sid = st.query_params.get("sid")
+    _username = auth.get_username(_sid) if _sid else None
+    if _username:
+        st.session_state.authed_username = _username
+    else:
+        st.title("EDF Proposal Evaluator")
+        st.warning("Please log in first.")
+        try:
+            _host_header = st.context.headers.get("host")
+        except Exception:
+            _host_header = None
+        _login_url = auth.peer_url(_host_header, AUTH_PORT)
+        st.markdown(
+            f'<a href="{_login_url}" target="_self" '
+            'style="display:inline-block;padding:.5rem 1rem;border-radius:8px;'
+            'background:#dc2626;color:#fff;text-decoration:none;font-weight:600;">'
+            "Go to login →</a>",
+            unsafe_allow_html=True,
+        )
+        st.stop()
 
 # ---------------------------------------------------------------------------
 # CSS
@@ -392,6 +420,9 @@ for _k, _v in _DEFAULTS.items():
 
 if st.session_state.session_id is None:
     st.session_state.session_id = uuid.uuid4().hex[:12]
+
+if not st.session_state.submitted_by:
+    st.session_state.submitted_by = st.session_state.authed_username
 
 if st.session_state.criteria is None:
     st.session_state.criteria = [Criterion(**c) for c in DEFAULT_RESEARCH_CRITERIA]
@@ -838,10 +869,11 @@ with st.sidebar:
         "Action type", ["Research", "Development"],
         index=0 if st.session_state.action_type == "Research" else 1,
     )
-    st.session_state.submitted_by = st.text_input(
-        "Submitted by *", value=st.session_state.submitted_by,
-        placeholder="e.g. Jane Doe",
-        help="Shown in the shared queue so others know whose job is running.",
+    st.text_input(
+        "Submitted by",
+        value=st.session_state.submitted_by,
+        disabled=True,
+        help="Your logged-in username. Shown in the shared queue so others know whose job is running.",
     )
     if new_action != st.session_state.action_type:
         st.session_state.action_type = new_action

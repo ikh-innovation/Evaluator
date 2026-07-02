@@ -5,43 +5,23 @@ services:
     volumes:
       - ./data:/data
 
-  ollama:
-    image: ollama/ollama:latest
+  auth:
+    build:
+      context: .
+      dockerfile: auth/Dockerfile
     ports:
-      - "11434:11434"
+      - "8502:8502"
     volumes:
-      - ollama_data:/root/.ollama
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-
-  ollama-init:
-    image: ollama/ollama:latest
+      - ./data:/app/data
     environment:
-      OLLAMA_HOST: http://ollama:11434
-      EDF_CHAT_MODEL: ${EDF_CHAT_MODEL-gemma4:26b}
-      EDF_EMBED_MODEL: ${EDF_EMBED_MODEL-nomic-embed-text}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        set -e
-        ollama pull $$EDF_CHAT_MODEL
-        ollama pull $$EDF_EMBED_MODEL
+      AUTH_PASSWORD: ${AUTH_PASSWORD:?AUTH_PASSWORD is required in .env}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:?OLLAMA_BASE_URL is required in .env}
+      EDF_CHAT_MODEL: ${EDF_CHAT_MODEL:?EDF_CHAT_MODEL is required in .env}
+      EDF_EMBED_MODEL: ${EDF_EMBED_MODEL:?EDF_EMBED_MODEL is required in .env}
     depends_on:
-      ollama:
-        condition: service_healthy
-    restart: on-failure
+      data:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
   frontend:
     build:
@@ -52,13 +32,11 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
-      EDF_CHAT_MODEL: ${EDF_CHAT_MODEL-gemma4:26b}
-      EDF_EMBED_MODEL: ${EDF_EMBED_MODEL-nomic-embed-text}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:?OLLAMA_BASE_URL is required in .env}
+      EDF_CHAT_MODEL: ${EDF_CHAT_MODEL:?EDF_CHAT_MODEL is required in .env}
+      EDF_EMBED_MODEL: ${EDF_EMBED_MODEL:?EDF_EMBED_MODEL is required in .env}
     depends_on:
       data:
-        condition: service_completed_successfully
-      ollama-init:
         condition: service_completed_successfully
     restart: unless-stopped
 
@@ -69,15 +47,10 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
-      EDF_CHAT_MODEL: ${EDF_CHAT_MODEL-gemma4:26b}
-      EDF_EMBED_MODEL: ${EDF_EMBED_MODEL-nomic-embed-text}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:?OLLAMA_BASE_URL is required in .env}
+      EDF_CHAT_MODEL: ${EDF_CHAT_MODEL:?EDF_CHAT_MODEL is required in .env}
+      EDF_EMBED_MODEL: ${EDF_EMBED_MODEL:?EDF_EMBED_MODEL is required in .env}
     depends_on:
       data:
         condition: service_completed_successfully
-      ollama-init:
-        condition: service_completed_successfully
     restart: unless-stopped
-
-volumes:
-  ollama_data:
