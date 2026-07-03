@@ -85,11 +85,18 @@ def _connect() -> Iterator[sqlite3.Connection]:
     RUNS_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(RUNS_DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
-    # WAL: concurrent readers don't block the worker's writes. Idempotent —
-    # only flips the file's journaling mode once.
+    # DELETE (rollback journal), not WAL: WAL relies on mmap'd shared-memory
+    # coordination between processes, which does not reliably propagate
+    # across separate container mount namespaces on Docker Desktop for
+    # Windows bind mounts — writes from one container (e.g. auth) could be
+    # invisible to reads from another (e.g. frontend), even though they
+    # share the same host file. DELETE mode uses plain file locking, which
+    # works correctly across containers; write throughput here is trivially
+    # low so WAL's concurrency benefit isn't needed. Idempotent — only flips
+    # the file's journaling mode once.
     try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("PRAGMA synchronous=FULL")
     except sqlite3.DatabaseError:
         pass
     try:
