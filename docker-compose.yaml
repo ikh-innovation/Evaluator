@@ -14,7 +14,6 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      AUTH_PASSWORD: ${AUTH_PASSWORD:?AUTH_PASSWORD is required in .env}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:?OLLAMA_BASE_URL is required in .env}
       EDF_CHAT_MODEL: ${EDF_CHAT_MODEL:?EDF_CHAT_MODEL is required in .env}
       EDF_EMBED_MODEL: ${EDF_EMBED_MODEL:?EDF_EMBED_MODEL is required in .env}

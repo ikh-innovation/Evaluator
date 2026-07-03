@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -14,19 +13,6 @@ from backend import auth  # noqa: E402
 
 FRONTEND_PORT = 8501
 
-
-def _require_env(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise RuntimeError(
-            f"Missing required environment variable {name!r}. "
-            f"Set it in your .env file (see .env.example)."
-        )
-    return value
-
-
-AUTH_PASSWORD = _require_env("AUTH_PASSWORD")
-
 st.set_page_config(page_title="EDF Evaluator — Login", layout="centered")
 
 try:
@@ -39,14 +25,11 @@ st.subheader("Log in")
 
 with st.form("login"):
     username = st.text_input("Username", placeholder="e.g. Jane Doe")
-    password = st.text_input("Password", type="password")
     submitted = st.form_submit_button("Log in")
 
 if submitted:
     if not username.strip():
         st.error("Enter a username.")
-    elif password != AUTH_PASSWORD:
-        st.error("Invalid password.")
     else:
         session_id = auth.create_session(username.strip())
         app_url = f"{auth.peer_url(_host_header, FRONTEND_PORT)}/?sid={session_id}"
