@@ -183,6 +183,15 @@ button[data-testid="stBaseButton-primary"]:disabled {
     border-color: #d4d4d4 !important;
 }
 
+/* Model selectors are locked (disabled) so the UI still shows which models
+   are in use, but the dropdown arrow — a clickability affordance — is
+   removed entirely rather than just grayed out, since it's no longer an
+   interactive control. Marker + :has() on the enclosing row scopes this to
+   just these two selectboxes, not the Action type dropdown elsewhere. */
+[data-testid="stHorizontalBlock"]:has(.edf-model-lock-marker) [data-testid="stSelectbox"] svg {
+    display: none !important;
+}
+
 /* ── Queue status bar ─────────────────────────────────────────────────── */
 /* Fixed to the bottom of the viewport with margin on all sides, so it reads
    as a distinct floating panel rather than sitting flush under the page
@@ -834,6 +843,7 @@ def _render_run_details(run: dict[str, Any]) -> None:
             st.caption("Only the admin user can delete runs.")
 
 
+@st.fragment(run_every="3s")
 def history_tab() -> None:
     all_runs = db.list_runs()
     if not all_runs:
@@ -926,16 +936,19 @@ with st.sidebar:
         _chat_options = [st.session_state.selected_chat_model] + _chat_options
     if st.session_state.selected_embed_model not in _embed_options:
         _embed_options = [st.session_state.selected_embed_model] + _embed_options
+    st.markdown('<span class="edf-model-lock-marker"></span>', unsafe_allow_html=True)
     _model_cols = st.columns(2)
     with _model_cols[0]:
         st.session_state.selected_chat_model = st.selectbox(
             "Chat model", _chat_options,
             index=_chat_options.index(st.session_state.selected_chat_model),
+            disabled=True,
         )
     with _model_cols[1]:
         st.session_state.selected_embed_model = st.selectbox(
             "Embedding model", _embed_options,
             index=_embed_options.index(st.session_state.selected_embed_model),
+            disabled=True,
         )
 
     st.header("Call configuration")
@@ -1012,6 +1025,67 @@ with st.sidebar:
         st.info(
             f"You have {n_mine} submission{'s' if n_mine != 1 else ''} in flight. "
             "Results will appear here automatically when each one finishes."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Result panel — its own auto-refreshing fragment (not a forced full-app
+# rerun) so it appears the moment your own job finishes, without disturbing
+# anything you might be typing elsewhere on the page.
+# ---------------------------------------------------------------------------
+
+@st.fragment(run_every="2s")
+def _render_result_panel() -> None:
+    result = st.session_state.result
+    if not result:
+        return
+    st.divider()
+    st.header("Evaluation result")
+
+    weighted = result.get("weighted_total", 0.0)
+    max_weighted = result.get("max_weighted_total", 1.0) or 1.0
+    threshold = result.get("overall_threshold")
+    passed = (threshold is None) or (weighted >= threshold)
+    band = result.get("predicted_band", "—")
+    score_pct = (weighted / max_weighted) * 100 if max_weighted else 0.0
+
+    with st.container(border=True):
+        cols = st.columns(4)
+        cols[0].metric("Weighted total", f"{weighted:g}", f"/ {max_weighted:g}")
+        cols[1].metric("Threshold", f"{threshold:g}" if threshold is not None else "—")
+        cols[2].metric("Pass / Fail", "PASS" if passed else "FAIL",
+                       delta=f"{'+' if passed else '−'}{abs(weighted - (threshold or 0)):g}",
+                       delta_color="normal" if passed else "inverse")
+        cols[3].metric("Predicted band", band)
+        st.progress(min(weighted / max_weighted, 1.0), text=f"{score_pct:.1f}% of max")
+        st.caption(
+            f"{result.get('proposal_acronym', '—')} · `{result.get('call_id', '—')}` · "
+            f"{result.get('action_type', '—')} · Confidence: {result.get('overall_confidence', '—')}"
+        )
+
+    with st.container(border=True):
+        st.markdown("##### ESR-style summary")
+        st.write(result.get("esr_style_summary", "—"))
+
+    st.markdown("##### Per-criterion breakdown")
+    for c in result.get("criteria", []):
+        with st.container(border=True):
+            _render_criterion_card(c)
+
+    foot = st.columns([1, 1])
+    with foot[0]:
+        st.download_button(
+            "Download JSON",
+            data=json.dumps(result, indent=2).encode("utf-8"),
+            file_name=f"evaluation_{result.get('call_id', 'edf')}.json",
+            mime="application/json", use_container_width=True,
+        )
+    with foot[1]:
+        st.download_button(
+            "Download CSV",
+            data=_run_to_csv(result),
+            file_name=f"evaluation_{result.get('call_id', 'edf')}.csv",
+            mime="text/csv", use_container_width=True,
         )
 
 
@@ -1152,57 +1226,7 @@ with tab_evaluate:
             except Exception as exc:
                 st.error(f"Could not queue evaluation: {exc}")
 
-    # ── Latest result for this session ─────────────────────────────────────────
-    result = st.session_state.result
-    if result:
-        st.divider()
-        st.header("Evaluation result")
-
-        weighted = result.get("weighted_total", 0.0)
-        max_weighted = result.get("max_weighted_total", 1.0) or 1.0
-        threshold = result.get("overall_threshold")
-        passed = (threshold is None) or (weighted >= threshold)
-        band = result.get("predicted_band", "—")
-        score_pct = (weighted / max_weighted) * 100 if max_weighted else 0.0
-
-        with st.container(border=True):
-            cols = st.columns(4)
-            cols[0].metric("Weighted total", f"{weighted:g}", f"/ {max_weighted:g}")
-            cols[1].metric("Threshold", f"{threshold:g}" if threshold is not None else "—")
-            cols[2].metric("Pass / Fail", "PASS" if passed else "FAIL",
-                           delta=f"{'+' if passed else '−'}{abs(weighted - (threshold or 0)):g}",
-                           delta_color="normal" if passed else "inverse")
-            cols[3].metric("Predicted band", band)
-            st.progress(min(weighted / max_weighted, 1.0), text=f"{score_pct:.1f}% of max")
-            st.caption(
-                f"{result.get('proposal_acronym', '—')} · `{result.get('call_id', '—')}` · "
-                f"{result.get('action_type', '—')} · Confidence: {result.get('overall_confidence', '—')}"
-            )
-
-        with st.container(border=True):
-            st.markdown("##### ESR-style summary")
-            st.write(result.get("esr_style_summary", "—"))
-
-        st.markdown("##### Per-criterion breakdown")
-        for c in result.get("criteria", []):
-            with st.container(border=True):
-                _render_criterion_card(c)
-
-        foot = st.columns([1, 1])
-        with foot[0]:
-            st.download_button(
-                "Download JSON",
-                data=json.dumps(result, indent=2).encode("utf-8"),
-                file_name=f"evaluation_{result.get('call_id', 'edf')}.json",
-                mime="application/json", use_container_width=True,
-            )
-        with foot[1]:
-            st.download_button(
-                "Download CSV",
-                data=_run_to_csv(result),
-                file_name=f"evaluation_{result.get('call_id', 'edf')}.csv",
-                mime="text/csv", use_container_width=True,
-            )
+    _render_result_panel()
 
 with tab_history:
     history_tab()
