@@ -11,6 +11,19 @@ from typing import Any
 
 import ollama
 import streamlit as st
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    ListFlowable,
+    ListItem,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -193,63 +206,56 @@ button[data-testid="stBaseButton-primary"]:disabled {
 }
 
 /* ── Queue status bar ─────────────────────────────────────────────────── */
-/* Fixed to the bottom of the viewport with margin on all sides, so it reads
-   as a distinct floating panel rather than sitting flush under the page
-   content — same white/black palette as the rest of the site, no inversion.
-   stMain (the content area, excluding the sidebar) is made the containing
-   block for our fixed elements via a no-op transform, so left/right below
-   are relative to the content area only — never hidden under the sidebar,
-   and correct even when the sidebar is resized or collapsed. */
-[data-testid="stAppViewContainer"] .block-container {
-    padding-bottom: 7rem !important;
-}
-[data-testid="stMain"] {
-    transform: translateZ(0);
-}
+/* position: sticky, not fixed — this is the actual correct tool here.
+   The bar is the last element on the page, which scrolls at the document
+   level (not an inner scroll box), so sticky naturally inherits its
+   horizontal position from normal document flow — the same flow that
+   already correctly excludes the sidebar and re-adjusts live when it's
+   dragged or collapsed, no hardcoded width/JS measurement needed. Two
+   earlier attempts (a containing-block transform trick, then a hardcoded
+   fixed-position offset) each fixed one dimension of this while breaking
+   the other; sticky avoids the tradeoff entirely. */
 .edf-queue-bar {
-    position: fixed;
-    left: 1.25rem;
-    right: 1.25rem;
+    position: sticky;
     bottom: 1.25rem;
     z-index: 999;
     display: flex;
     align-items: center;
     gap: .9rem;
     padding: .6rem 1rem;
-    border: 1px solid #000;
+    border: 1px solid #93c5fd;
     background: #ffffff;
     font-size: .92rem;
 }
 .edf-queue-bar.idle {
-    color: #525252;
-    border-color: #d4d4d4;
+    color: #60a5fa;
+    border-color: #bfdbfe;
 }
 .edf-queue-bar.busy {
     border-bottom: none;
-    color: #000;
+    background: #eff6ff;
+    color: #1e40af;
 }
 .edf-queue-bar .dot {
     width: 10px; height: 10px; border-radius: 50%;
-    border: 2px solid #000; background: transparent; flex-shrink: 0;
+    border: 2px solid #3b82f6; background: transparent; flex-shrink: 0;
 }
 .edf-queue-bar.busy .dot {
-    background: #000;
+    background: #3b82f6;
 }
 .edf-queue-bar .summary  { font-weight: 700; white-space: nowrap; }
-.edf-queue-bar .msg      { color: #525252; font-size: .82rem;
+.edf-queue-bar .msg      { color: #1e40af; font-size: .82rem;
                             flex: 1; min-width: 0;
                             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .edf-queue-bar .progress { height: 6px; flex: 0 0 160px; max-width: 28%;
-                            background: #e5e5e5; overflow: hidden; }
+                            background: #dbeafe; overflow: hidden; }
 .edf-queue-bar .progress > div {
-    height: 100%; background: #000; transition: width .4s ease;
+    height: 100%; background: #3b82f6; transition: width .4s ease;
 }
 
-/* ── Sliding chip strip — fixed directly above the bar, same width/offset. */
+/* ── Sliding chip strip — sticky directly above the bar, same reasoning. */
 [data-testid="stHorizontalBlock"]:has(.qbar-chip) {
-    position: fixed !important;
-    left: 1.25rem !important;
-    right: 1.25rem !important;
+    position: sticky !important;
     bottom: 4rem !important;
     z-index: 999 !important;
     flex-wrap: nowrap !important;
@@ -259,15 +265,15 @@ button[data-testid="stBaseButton-primary"]:disabled {
     align-items: center !important;
     gap: .55rem !important;
     padding: .6rem .9rem .7rem .9rem;
-    background: #f5f5f5;
-    border: 1px solid #000;
-    border-top: 1px dashed #a3a3a3;
+    background: #eff6ff;
+    border: 1px solid #93c5fd;
+    border-top: 1px dashed #bfdbfe;
     scrollbar-width: thin;
-    scrollbar-color: #000 #e5e5e5;
+    scrollbar-color: #3b82f6 #dbeafe;
 }
 [data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar { height: 6px; }
-[data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar-track { background: #e5e5e5; }
-[data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar-thumb { background: #000; }
+[data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar-track { background: #dbeafe; }
+[data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar-thumb { background: #3b82f6; }
 
 /* Each column = one (chip + ×) pair. Shrinks to content; kids in a single
    horizontal row with zero gap so the chip and × visually become one pill. */
@@ -536,6 +542,150 @@ def _run_to_csv(run: dict[str, Any]) -> bytes:
             "\n".join(c.get("recommendations") or []),
         ])
     return ("﻿" + out.getvalue()).encode("utf-8")
+
+
+_PDF_STYLES = getSampleStyleSheet()
+_PDF_TITLE = ParagraphStyle(
+    "EDFTitle", parent=_PDF_STYLES["Title"], fontSize=18, spaceAfter=4, textColor=colors.black,
+)
+_PDF_CAPTION = ParagraphStyle(
+    "EDFCaption", parent=_PDF_STYLES["Normal"], fontSize=9,
+    textColor=colors.HexColor("#525252"), spaceAfter=12,
+)
+_PDF_H2 = ParagraphStyle(
+    "EDFH2", parent=_PDF_STYLES["Heading2"], fontSize=13, spaceBefore=14, spaceAfter=6,
+    textColor=colors.black,
+)
+_PDF_H3 = ParagraphStyle(
+    "EDFH3", parent=_PDF_STYLES["Heading3"], fontSize=11, spaceBefore=10, spaceAfter=4,
+    textColor=colors.black,
+)
+_PDF_BODY = ParagraphStyle("EDFBody", parent=_PDF_STYLES["Normal"], fontSize=10, leading=14)
+_PDF_BULLET = ParagraphStyle("EDFBullet", parent=_PDF_STYLES["Normal"], fontSize=9.5, leading=13)
+_PDF_LABEL = ParagraphStyle(
+    "EDFLabel", parent=_PDF_BULLET, fontName="Helvetica-Bold", spaceBefore=4,
+)
+_PDF_FOOTNOTE = ParagraphStyle(
+    "EDFFootnote", parent=_PDF_STYLES["Normal"], fontSize=8, textColor=colors.HexColor("#737373"),
+)
+_PDF_TABLE_STYLE = TableStyle([
+    ("BOX", (0, 0), (-1, -1), 0.75, colors.black),
+    ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#93c5fd")),
+    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eff6ff")),
+    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+    ("FONTSIZE", (0, 0), (-1, -1), 9),
+    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ("TOPPADDING", (0, 0), (-1, -1), 5),
+    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+])
+
+
+def _pdf_bullets(items: list[str] | None) -> ListFlowable | Paragraph:
+    items = [i for i in (items or []) if i]
+    if not items:
+        return Paragraph("—", _PDF_BULLET)
+    return ListFlowable(
+        [ListItem(Paragraph(i, _PDF_BULLET)) for i in items],
+        bulletType="bullet", start="circle", leftIndent=12,
+    )
+
+
+def _run_to_pdf(run: dict[str, Any]) -> bytes:
+    """Render a run into a single, consistently-formatted PDF report —
+    same template every time, so exports are directly comparable."""
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        topMargin=18 * mm, bottomMargin=18 * mm, leftMargin=18 * mm, rightMargin=18 * mm,
+        title=f"Evaluation — {run.get('proposal_acronym', 'Proposal')}",
+    )
+    story: list = []
+
+    story.append(Paragraph(
+        f"{run.get('proposal_acronym', '—')} · {run.get('call_id', '—')}", _PDF_TITLE,
+    ))
+    story.append(Paragraph(
+        f"Generated: {run.get('generated_at', '—')} &nbsp;&nbsp;·&nbsp;&nbsp; "
+        f"Action type: {run.get('action_type', '—')} &nbsp;&nbsp;·&nbsp;&nbsp; "
+        f"Confidence: {run.get('overall_confidence', '—')}",
+        _PDF_CAPTION,
+    ))
+
+    weighted = run.get("weighted_total", 0.0)
+    max_weighted = run.get("max_weighted_total", 1.0) or 1.0
+    threshold = run.get("overall_threshold")
+    passed = (threshold is None) or (weighted >= threshold)
+    band = run.get("predicted_band", "—")
+
+    summary_table = Table(
+        [
+            ["Weighted total", "Threshold", "Pass / Fail", "Predicted band"],
+            [
+                f"{weighted:g} / {max_weighted:g}",
+                f"{threshold:g}" if threshold is not None else "—",
+                "PASS" if passed else "FAIL",
+                band,
+            ],
+        ],
+        colWidths=[41 * mm] * 4,
+    )
+    summary_table.setStyle(_PDF_TABLE_STYLE)
+    summary_table.hAlign = "LEFT"
+    story.append(summary_table)
+    story.append(Spacer(1, 14))
+
+    story.append(Paragraph("ESR-style summary", _PDF_H2))
+    story.append(Paragraph((run.get("esr_style_summary") or "—").replace("\n", "<br/>"), _PDF_BODY))
+
+    criteria = run.get("criteria", [])
+    story.append(Paragraph("Per-criterion breakdown", _PDF_H2))
+
+    crit_rows = [["Criterion", "Score", "Weight", "Contribution", "Confidence"]]
+    for c in criteria:
+        score = c.get("score", 0) or 0
+        weight = c.get("weight", 0) or 0
+        crit_rows.append([
+            c.get("name", ""), f"{score:g}", f"×{weight:g}",
+            f"{score * weight:g}", (c.get("confidence") or "—").title(),
+        ])
+    crit_table = Table(
+        crit_rows, colWidths=[70 * mm, 22 * mm, 22 * mm, 28 * mm, 27 * mm], repeatRows=1,
+    )
+    crit_table.setStyle(_PDF_TABLE_STYLE)
+    crit_table.hAlign = "LEFT"
+    story.append(crit_table)
+    story.append(Spacer(1, 10))
+
+    for c in criteria:
+        score = c.get("score", 0) or 0
+        max_score = c.get("max_score", 5.0)
+        weight = c.get("weight", 0) or 0
+        story.append(Paragraph(
+            f"{c.get('name', '—')} — {score:g}/{max_score:g} · weight ×{weight:g}", _PDF_H3,
+        ))
+        story.append(Paragraph("Strengths", _PDF_LABEL))
+        story.append(_pdf_bullets(c.get("strengths")))
+        story.append(Paragraph("Weaknesses", _PDF_LABEL))
+        story.append(_pdf_bullets(c.get("weaknesses")))
+        if c.get("missing_evidence"):
+            story.append(Paragraph("Missing evidence", _PDF_LABEL))
+            story.append(_pdf_bullets(c.get("missing_evidence")))
+        if c.get("evaluator_comment"):
+            story.append(Paragraph("Evaluator comment", _PDF_LABEL))
+            story.append(Paragraph(c["evaluator_comment"], _PDF_BULLET))
+        if c.get("recommendations"):
+            story.append(Paragraph("Recommendations", _PDF_LABEL))
+            story.append(_pdf_bullets(c.get("recommendations")))
+        story.append(Spacer(1, 8))
+
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(
+        run.get("notes", "Internal pre-screening output. Final judgement rests with human evaluators."),
+        _PDF_FOOTNOTE,
+    ))
+
+    doc.build(story)
+    return buf.getvalue()
 
 
 def _render_criterion_card(c: dict) -> None:
@@ -822,7 +972,7 @@ def _render_run_details(run: dict[str, Any]) -> None:
     for c in run.get("criteria", []):
         with st.expander(f"{c['name']} — {c['score']}/5 · weight ×{c['weight']}"):
             _render_criterion_card(c)
-    act = st.columns([1, 1, 1])
+    act = st.columns([1, 1, 1, 1])
     with act[0]:
         st.download_button("Export CSV", data=_run_to_csv(run),
                            file_name=f"evaluation_{run.get('call_id', 'edf')}.csv",
@@ -832,6 +982,10 @@ def _render_run_details(run: dict[str, Any]) -> None:
                            file_name=f"evaluation_{run.get('call_id', 'edf')}.json",
                            mime="application/json", use_container_width=True)
     with act[2]:
+        st.download_button("Export PDF", data=_run_to_pdf(run),
+                           file_name=f"evaluation_{run.get('call_id', 'edf')}.pdf",
+                           mime="application/pdf", use_container_width=True)
+    with act[3]:
         if is_admin:
             if st.button("Delete this run", type="primary", use_container_width=True):
                 try:
@@ -1040,7 +1194,13 @@ def _render_result_panel() -> None:
     if not result:
         return
     st.divider()
-    st.header("Evaluation result")
+    head_cols = st.columns([10, 1])
+    head_cols[0].header("Evaluation result")
+    with head_cols[1]:
+        st.write("")
+        if st.button("✕", key="dismiss_result", help="Dismiss — the run stays in History"):
+            st.session_state.result = None
+            st.rerun()
 
     weighted = result.get("weighted_total", 0.0)
     max_weighted = result.get("max_weighted_total", 1.0) or 1.0
@@ -1072,7 +1232,7 @@ def _render_result_panel() -> None:
         with st.container(border=True):
             _render_criterion_card(c)
 
-    foot = st.columns([1, 1])
+    foot = st.columns([1, 1, 1])
     with foot[0]:
         st.download_button(
             "Download JSON",
@@ -1086,6 +1246,13 @@ def _render_result_panel() -> None:
             data=_run_to_csv(result),
             file_name=f"evaluation_{result.get('call_id', 'edf')}.csv",
             mime="text/csv", use_container_width=True,
+        )
+    with foot[2]:
+        st.download_button(
+            "Download PDF",
+            data=_run_to_pdf(result),
+            file_name=f"evaluation_{result.get('call_id', 'edf')}.pdf",
+            mime="application/pdf", use_container_width=True,
         )
 
 
