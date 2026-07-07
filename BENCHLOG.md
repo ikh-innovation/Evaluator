@@ -8,7 +8,8 @@ per-criterion metrics observed. Follows the working order in `FIX README v2`.
 ## STEP 0 — Reproduce & verify (telemetry + guards)
 
 **Code commit:** _pending — telemetry changes staged in working tree, not yet committed._
-**Model (deployment):** `qwen3:30b-a3b-instruct-2507-q4_K_M` chat, `qwen3-embedding:4b` embed, `EDF_NUM_CTX=8192` (from `.env`).
+**Model (deployment):** `qwen3:30b-a3b-instruct-2507-q4_K_M` chat (instruct/non-thinking — compatible with `format="json"`), `qwen3-embedding:4b` embed.
+**Window/budgets (from `.env`):** `EDF_NUM_CTX=32768`, `EDF_MAX_INLINE_CHARS=48000`, `EDF_PROPOSAL_TOP_K=32`, `EDF_MAX_CHUNKS_PER_SECTION=4`. Worst-case criterion prompt+output ≈ 17.1k tokens (fits 32768 with headroom).
 
 ### Findings (from static audit + run-history inspection; no new run executed here)
 
@@ -27,16 +28,16 @@ per-criterion metrics observed. Follows the working order in `FIX README v2`.
    weighted total 35.5–36.5 / 45.** Consistent with §7b: v1 confidence never
    reflected coverage.
 
-3. **Deployment context window is too small for the worst-case prompt.**
-   `.env` sets `EDF_NUM_CTX=8192`. The report's worst-case *partial-branch*
-   criterion prompt is ~9,595 tokens (`PROMPTING_STRATEGY_REPORT.md` §3.3:
-   6,382-char skeleton + up to 24,000-char excerpt + up to 8,000-char call
-   context). At `num_ctx=8192` Ollama silently truncates — the tail of the
-   proposal excerpt or the JSON output is dropped. This interacts with §7a/§7b
-   and must be accounted for before trusting any v2 baseline. Options: raise
-   `EDF_NUM_CTX`, or lower `EDF_MAX_INLINE_CHARS`/`EDF_MAX_CALL_CONTEXT_CHARS`
-   so the assembled prompt fits 8192. (Not changed here — deployment values are
-   yours to set.)
+3. **Context window vs prompt size — resolved by config.** The initial `.env`
+   had `EDF_NUM_CTX=8192`, below the worst-case partial-branch prompt (~9,595
+   tokens: 6,382-char skeleton + 24,000-char excerpt + 8,000-char call context),
+   so Ollama would silently truncate the excerpt/output. Resolved by raising
+   `EDF_NUM_CTX=32768` **and** enlarging the excerpt budgets in tandem
+   (`EDF_MAX_INLINE_CHARS=48000`, `EDF_PROPOSAL_TOP_K=32`,
+   `EDF_MAX_CHUNKS_PER_SECTION=4`) to lift per-criterion coverage. New worst case
+   ≈ 17.1k tokens < 32768. **If Ollama OOMs on the deployment GPU:** drop
+   `EDF_NUM_CTX` to 24576/16384 (and `EDF_MAX_INLINE_CHARS` proportionally), or
+   enable KV-cache quantization on the Ollama host.
 
 4. **UI shows the capped confidence, not a raw model field.**
    `frontend/app.py:_render_criterion_card` reads `c.get("confidence")` from the

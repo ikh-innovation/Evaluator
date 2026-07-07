@@ -9,6 +9,36 @@ RUNS_DB_PATH: Path = DATA_DIR / "runs.sqlite"
 INPUT_DOCS_DIR: Path = ROOT / "input_docs"
 
 
+def _load_dotenv(path: Path = ROOT / ".env") -> None:
+    """Load repo-root .env into the environment on every launch path.
+
+    Under `docker compose` the values are already injected as container env, so
+    each key is applied with setdefault — real environment always wins and this
+    never clobbers it. When the app is launched directly (e.g. `streamlit run`),
+    this is what makes the process pick up the .env. No external dependency:
+    a minimal KEY=VALUE parser (ignores blanks, `#` comments, optional `export`
+    prefix, and surrounding quotes).
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):]
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_dotenv()
+
+
 def _require_env(name: str) -> str:
     value = os.environ.get(name)
     if not value:
