@@ -26,9 +26,12 @@ EDF_RUBRIC = """EDF scoring rubric (apply per criterion, 0–5 in 0.5 increments
 4 — "very good". Addressed very well; a small number of shortcomings.
 5 — "excellent". Addressed convincingly; only minor shortcomings, if any.
 
-Scores of 4.5 and 5.0 are normal outcomes for well-written proposals; scores
-of 2.0–3.0 are normal outcomes for weak ones. Choose the band the findings
-actually support — do not drift to the middle."""
+Calibration (from real EDF Evaluation Summary Reports): even proposals that
+win funding typically score 3.5–4.5 on most criteria, each carrying explicit
+"However, …" weaknesses; a 5.0 is exceptional and must be earned by clearing
+every probe of the weakness scan. A run of straight 5.0s with no weaknesses
+almost always means the evaluation failed to probe, not that the proposal is
+flawless. Equally, do not drift to the middle: follow the findings."""
 
 
 _BAND_VALUES = {
@@ -71,6 +74,12 @@ Rules:
    Self-check before output: if a finding could be written about a randomly
    chosen proposal (e.g. "no quantified metrics", "alignment with call
    objectives not explicit"), either tie it to a concrete passage or delete it.
+   IMPORTANT: "the proposal does not sufficiently detail / demonstrate /
+   clarify X" IS a valid, score-relevant weakness when X is a specific element
+   of THIS proposal that the criterion materially needs (e.g. "reliance on
+   robust GNSS receivers as the primary navigation source is not clarified") —
+   that is exactly how official ESRs phrase weaknesses. Only the fully generic
+   form that names no proposal-specific X is banned.
 3. Critique like a domain expert: question the feasibility of specific
    technical claims, the realism of risk treatment, possible duplication with
    prior work as described in the text, and whether each partner's role is
@@ -81,27 +90,33 @@ Rules:
    under "input_gaps". NEVER list it as a weakness or missing evidence, and
    NEVER reduce the score because of it. Penalise only what the visible text
    demonstrably fails to contain or handles badly.
-5. Weaknesses are OPTIONAL. If the criterion is addressed convincingly,
-   return an empty weaknesses list and a score of 4.5 or 5.0 — do not invent
-   criticism for balance. Equally, do not soften genuine deficiencies: a weak
-   criterion must receive pointed, specific criticism and a score of 3.0 or
-   below. Do not inflate and do not deflate.
+5. MANDATORY weakness scan before scoring. In "weakness_scan", list the 3–5
+   aspects of the visible text that a hostile expert reviewer would probe for
+   THIS criterion — unsubstantiated performance figures, techniques the text
+   relies on but under-specifies, internal inconsistencies, unclear
+   differentiation from existing systems or prior projects, thin treatment of
+   a dependency or risk the concept hinges on. For each probe set "verdict"
+   to "weakness" (and carry it into the weaknesses list) or "cleared" (the
+   visible text genuinely settles it — say where). Do not invent criticism: a
+   probe the text settles is "cleared". But an empty weaknesses list is
+   legitimate ONLY when every probe was genuinely cleared — official ESRs
+   attach at least one "However, …" weakness to most criteria even for
+   proposals that win funding. Do not inflate and do not deflate.
 6. Score in two steps. First classify each weakness you kept:
    - SIGNIFICANT: it materially endangers the achievement of this
      criterion's objectives (e.g. no credible plan, unmanaged major risk,
      unsubstantiated core claim).
-   - MINOR: presentational, or a detail a competently run project settles
-     during execution. Wanting yet more sub-detail from a text that already
-     gives the level of specificity of a well-prepared proposal (quantified
-     milestones, named owners, itemised resources) is at most MINOR — more
-     detail is always conceivable and its absence is not a finding.
-   Then derive the band: "excellent" = no significant weaknesses (minor ones
-   permitted); "very good" = no significant weaknesses but several minor
-   ones; "good" = one or two significant shortcomings; "fair" = significant
-   weaknesses across several aspects; "poor"/"fails" = inadequately
-   addressed or cannot be assessed. Output the band in "band", then set
-   "score" to the band value, or 0.5 above/below it only when the findings
-   sit between two bands.
+   - MINOR: it does not endanger the criterion's objectives but a real
+     evaluator would still write it as a "However, …" (insufficient detail or
+     substantiation of a specific material element, missing quantitative
+     comparison the text itself invites, one thinly treated sub-aspect).
+   Then derive band and score together: "excellent" (5.0) = every probe
+   cleared, no weaknesses; 4.5 = one or two minor weaknesses; "very good"
+   (4.0) = several minor weaknesses, none significant; 3.5 = many minor or
+   one borderline-significant weakness; "good" (3.0) = one or two significant
+   shortcomings; "fair" (2.0) = significant weaknesses across several
+   aspects; "poor"/"fails" = inadequately addressed or cannot be assessed.
+   Output the band in "band" and the consistent value in "score".
 7. Confidence reflects input coverage first, evidence second:
    - "high": you saw the full proposal (or every section this criterion
      needs) and found clear evidence.
@@ -122,6 +137,7 @@ Output STRICT JSON ONLY (no markdown, no prose) with this exact schema:
   "band": "fails" | "poor" | "fair" | "good" | "very good" | "excellent",
   "score": <number, 0..5, in 0.5 increments, consistent with band>,
   "confidence": "low" | "medium" | "high",
+  "weakness_scan": [{{"aspect": string, "verdict": "weakness" | "cleared", "reason": string}}, ...],
   "strengths": [string, ...],
   "weaknesses": [string, ...],
   "missing_evidence": [string, ...],
@@ -130,16 +146,21 @@ Output STRICT JSON ONLY (no markdown, no prose) with this exact schema:
   "recommendations": [string, ...]
 }}
 
-Illustration of a valid excellent-criterion output (FICTIONAL — never reuse
-its entities or wording; shown only to demonstrate that empty weaknesses and a
-score of 5.0 are legitimate):
-{{"band": "excellent", "score": 5.0, "confidence": "high",
+Illustration of a valid output (FICTIONAL — never reuse its entities or
+wording; shown only to demonstrate the expected critical depth. An "excellent"
+with empty weaknesses is equally legitimate, but only when every scan probe is
+genuinely cleared):
+{{"band": "very good", "score": 4.0, "confidence": "medium",
+"weakness_scan": [
+  {{"aspect": "claimed all-weather sensing performance", "verdict": "weakness", "reason": "the \\"98% detection rate\\" figure is given without test conditions or a comparison baseline"}},
+  {{"aspect": "access to test infrastructure", "verdict": "cleared", "reason": "WP5 trials are assigned to Partner P3 at its accredited facility"}},
+  {{"aspect": "fallback when the datalink is jammed", "verdict": "weakness", "reason": "autonomy mode is asserted but the handover logic is not described"}}],
 "strengths": ["The division of work assigns the validation campaign to the consortium member that operates the required test infrastructure (\\"WP5 validation trials led by Partner P3 at its accredited facility\\"), matching capability to task."],
-"weaknesses": [],
+"weaknesses": ["The proposal does not sufficiently substantiate the claimed \\"98% detection rate\\": no test conditions or baseline comparison are given, although the impact argument rests on it.", "The handover between remote control and the asserted \\"full autonomous fallback\\" under datalink jamming is not described, leaving a core operational claim unsupported."],
 "missing_evidence": [],
 "input_gaps": [],
-"evaluator_comment": "The work plan is coherent and convincingly resourced; only minor presentational shortcomings.",
-"recommendations": []}}
+"evaluator_comment": "The work plan is coherent and convincingly resourced. However, the central detection-performance claim and the jamming fallback are insufficiently substantiated.",
+"recommendations": ["Substantiate the detection-rate claim with test conditions and a baseline."]}}
 """
 
 SUMMARY_PROMPT = """You are summarising an EDF Part B proposal evaluation in the
@@ -179,7 +200,7 @@ def _chat_json_model(model: str = CHAT_MODEL) -> ChatOllama:
         _chat_json_cache[model] = ChatOllama(
             model=model,
             base_url=OLLAMA_BASE_URL,
-            temperature=0.1,
+            temperature=0.0,
             format="json",
             timeout=REQUEST_TIMEOUT_S,
             keep_alive=-1,
@@ -195,7 +216,7 @@ def _chat_text_model(model: str = CHAT_MODEL) -> ChatOllama:
         _chat_text_cache[model] = ChatOllama(
             model=model,
             base_url=OLLAMA_BASE_URL,
-            temperature=0.3,
+            temperature=0.0,
             timeout=REQUEST_TIMEOUT_S,
             keep_alive=-1,
             num_gpu=NUM_GPU,
@@ -285,6 +306,7 @@ def evaluate_criterion(
     msg = _chat_json_model(chat_model).invoke(prompt)
     parsed = _parse_json(msg.content)
 
+    parsed.setdefault("weakness_scan", [])
     parsed.setdefault("strengths", [])
     parsed.setdefault("weaknesses", [])
     parsed.setdefault("missing_evidence", [])

@@ -101,4 +101,101 @@ _Do not tune anything to this baseline; it is the regression reference only._
 
 ---
 
+## STEP 0b — Deployment drift fixed; temperature 0; TOP_K rebalance (2026-07-07)
+
+**Model (deployment):** `qwen3:30b-a3b-instruct-2507-q4_K_M` chat, `qwen3-embedding:4b` embed — verified live via `/api/ps` (21.8 GB VRAM, ctx 32768).
+
+### Root cause of "evaluations feel too fast / shallow"
+
+The running compose stack was built **Jul 3** — before every prompting/window
+commit (61097d8, 9959cbe, 8a8ba3e). The live containers ran the **v1 prompt**
+with `MAX_INLINE=5000`, `TOP_K=4`, temps 0.1/0.3 (verified by introspecting
+`backend.config` inside the old containers). Per-criterion prompts were ~2k
+tokens → seconds-fast, tiny-input evaluations. Additionally the Dockerfiles do
+not copy `.env` and compose only forwarded 6 vars, so the enlarged retrieval
+budgets **never reached the containers at all**.
+
+### Changes
+
+- `backend/evaluator.py`: temperature **0.0** for both the JSON eval client and
+  the text (summary/band) client — full determinism at fixed input.
+- `docker-compose.yaml`: `env_file: .env` added to auth/frontend/backend so
+  every `.env` key (incl. `EDF_MAX_INLINE_CHARS`, `EDF_PROPOSAL_TOP_K`,
+  `EDF_MAX_CHUNKS_PER_SECTION`) reaches the containers.
+- `.env`: `EDF_PROPOSAL_TOP_K` 32 → **64**. Observed avg chunk is ~1,100 chars
+  (not the nominal 1,500), so at 32 the chunk count was the binding cap and only
+  ~18.5k of the 48k char budget was used. At 64 the char budget binds.
+- Stack rebuilt (`docker compose up -d --build`). **Operational rule: rebuild
+  after every code change — containers COPY the code, they do not mount it.**
+
+### In-container smoke test (Part B template, 865k chars / 768 chunks)
+
+| Step | Result |
+|---|---|
+| DOCX parse (heading styles) | 30 sections, 768 chunks, 0.4 s |
+| Embedding index | 150.7 s |
+| Retrieval (criterion 1) | 47,952 chars (budget-bound), coverage 5.28%, pulls §1.1/§1.2/§1.3/§2.1… |
+| LLM eval (criterion 1) | 14.4 s, valid JSON, band=excellent, quote-anchored strengths |
+| Confidence chain | model=high → cap=medium (partial input) → final=medium ✓ |
+
+At TOP_K=32 the same retrieval returned 18,487 chars / 2.00% coverage and
+missed §1.3 (the criterion's own section); at 64 it is included.
+
+---
+
+## FIX 1 — Leniency collapse fixed: mandatory weakness scan + ESR calibration (2026-07-07)
+
+**Baseline failure (v2 prompt, run `SWARMER3`):** 45.0/45, every criterion
+`excellent`/5.0, **zero** weaknesses, zero missing_evidence. Official DEFIS ESR
+for the same proposal (101224078/SWARMER): **38.00/45** (3.5, 4.0, 4.5, 4.0,
+5.0, 4.5), every criterion carrying "However, …" weaknesses.
+
+**Root cause:** the v2 anti-generic-criticism guards outlawed the exact genre
+real ESRs write. Rule 2's self-check ordered deletion of findings like "no
+quantified metrics"; rule 6 declared "wanting more sub-detail … is not a
+finding" — yet the real ESR's weaknesses are precisely "does not sufficiently
+detail/demonstrate/clarify X". With all weaknesses suppressed, rule 6 mapped
+empty-weaknesses → excellent → 5.0 mechanically. The single excellent/5.0
+illustration anchored the same pattern. Temp 0 made it deterministic.
+
+**Changes (`backend/evaluator.py`, `backend/pipeline.py`):**
+- Rubric calibration: funded proposals typically score 3.5–4.5 per criterion;
+  straight 5.0s mean the evaluation failed to probe.
+- Rule 2: "does not sufficiently detail/demonstrate X" is a VALID weakness when
+  X is proposal-specific and material; only the generic no-X form stays banned.
+- Rule 5 → mandatory `weakness_scan` (3–5 hostile probes per criterion, each
+  `weakness` or `cleared`); empty weaknesses legitimate only if all cleared.
+- Rule 6 band ladder mapped to half-steps (5.0 = all cleared; 4.5 = 1–2 minor;
+  4.0 = several minor; 3.5 = many minor / one borderline; …).
+- Illustration replaced with a "very good 4.0" example incl. scan + weaknesses.
+- Retrieval: adversarial query per criterion ("risks, limitations, assumptions,
+  dependencies…") so weakness-bearing content reaches the excerpt.
+- Run-level calibration warning when a whole run has zero weaknesses.
+
+**Verification (full pipeline in-container, same document, 232 s):**
+
+| Criterion | tool | real ESR | #weak | scan |
+|---|---|---|---|---|
+| Excellence | 4.0 | 3.5 | 4 | 5 probes / 3 weak |
+| Innovation | 4.0 | 4.0 | 4 | 5 / 3 |
+| Competitiveness | 4.0 | 4.5 | 5 | 5 / 4 |
+| EDTIB autonomy | 4.0 | 4.0 | 4 | 5 / 3 |
+| Cross-border coop | 4.0 | 5.0 | 3 | 5 / 3 |
+| Implementation | 4.0 | 4.5 | 5 | 5 / 4 |
+| **Weighted total** | **36.0/45** | **38.00/45** | | |
+
+Finding quality: the tool's top Excellence weakness ("claims 'high-precision
+positioning' in GNSS-denied environments without specifying the sensor fusion
+architecture") independently converges on the real ESR's top weakness
+(GNSS-denied navigation reliance not clarified).
+
+**Known residual:** per-criterion discrimination is compressed — every
+criterion lands on 4.0 (real spread 3.5–5.0). The scan now finds 3–5 probes
+everywhere; the band ladder maps "several minor" → 4.0 uniformly. Next
+candidate fix: weigh cleared-vs-weak probe ratio into the half-step choice, or
+let strong criteria (all probes cleared/minor presentational only) reach 4.5–5.0
+more readily.
+
+---
+
 <!-- Append FIX 1a, 1c, 1b, 1d, … below, one section per commit. -->

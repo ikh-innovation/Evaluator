@@ -199,6 +199,14 @@ def get_proposal_excerpt(
     aspects = _split_aspects(criterion_description)
     if len(aspects) > 1:
         queries += [f"{criterion_name}: {a}" for a in aspects]
+    # Adversarial query: retrieval tuned only to the criterion description
+    # returns the sections written to sell that criterion, so the evaluator
+    # never sees the material weaknesses live in. Pull in risk/limitation
+    # content explicitly so the weakness scan has something to probe.
+    queries.append(
+        f"{criterion_name}: risks, limitations, assumptions, dependencies, "
+        "open issues, shortcomings"
+    )
 
     norms = np.linalg.norm(vectors, axis=1)
     n_chunks = len(chunks)
@@ -392,13 +400,23 @@ def evaluate_proposal(
     # Wrong-document guard: flag (do not block) when the ingested file looks
     # like an ESR / scoresheet rather than a Part B proposal (FIX README v2 §STEP 0).
     esr_markers = detect_esr_markers(index["chunks"])
-    ingest_warning = (
-        "The ingested document opens with evaluation-report language "
-        f"({', '.join(esr_markers)}). It may be an ESR / evaluation form rather "
-        "than a Part B proposal — verify the correct file was uploaded."
-        if esr_markers
-        else ""
-    )
+    warnings: list[str] = []
+    if esr_markers:
+        warnings.append(
+            "The ingested document opens with evaluation-report language "
+            f"({', '.join(esr_markers)}). It may be an ESR / evaluation form rather "
+            "than a Part B proposal — verify the correct file was uploaded."
+        )
+    # Leniency guard: real ESRs attach weaknesses to most criteria even for
+    # funded proposals. Zero weaknesses across the whole run means the model
+    # failed to probe — surface that instead of letting a 45/45 pass silently.
+    if not any(r.get("weaknesses") for r in results):
+        warnings.append(
+            "Calibration warning: no weaknesses were identified on ANY "
+            "criterion. Official ESRs practically never do this, even for "
+            "funded proposals — treat these scores as inflated."
+        )
+    ingest_warning = " ".join(warnings)
 
     result = {
         "proposal_acronym": proposal_acronym,
