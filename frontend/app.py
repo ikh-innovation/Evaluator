@@ -910,6 +910,8 @@ def wipe_db_dialog() -> None:
 
 
 def _render_run_details(run: dict[str, Any]) -> None:
+    if run.get("ingest_warning"):
+        st.warning(run["ingest_warning"], icon="⚠️")
     st.markdown(f"### {run.get('proposal_acronym', '—')}  ·  `{run.get('call_id')}`")
     st.caption(
         f"Generated: {run.get('generated_at', '—')}  ·  "
@@ -1167,6 +1169,8 @@ def _render_result_panel() -> None:
     if not result:
         return
     st.divider()
+    if result.get("ingest_warning"):
+        st.warning(result["ingest_warning"], icon="⚠️")
     head_cols = st.columns([10, 1])
     head_cols[0].header("Evaluation result")
     with head_cols[1]:

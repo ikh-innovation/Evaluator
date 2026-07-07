@@ -299,10 +299,16 @@ def evaluate_criterion(
     # report "high" on partial input, and reported input gaps force "low"
     # (respectively "medium" when the full document was supplied, where a gap
     # can only mean an external annex).
+    # STEP 0 telemetry: keep the raw model value and the applied cap alongside
+    # the final capped value so runs are auditable (see FIX README v2 §STEP 0).
+    parsed["model_confidence"] = (
+        parsed["confidence"] if parsed["confidence"] in _CONF_ORDER else "medium"
+    )
     if full_document:
         cap = "medium" if parsed["input_gaps"] else "high"
     else:
         cap = "low" if parsed["input_gaps"] else "medium"
+    parsed["confidence_cap"] = cap
     parsed["confidence"] = _cap_confidence(parsed["confidence"], cap)
     return parsed
 

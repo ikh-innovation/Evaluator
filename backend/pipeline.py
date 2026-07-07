@@ -22,7 +22,7 @@ from .config import (
     PROPOSAL_CHUNK_TOP_K,
 )
 from .evaluator import evaluate_criterion, predict_band, summarise
-from .ingestion import extract_sections, extract_text
+from .ingestion import detect_esr_markers, extract_sections, extract_text
 
 ProgressCb = Callable[[str, float], None]
 
@@ -176,6 +176,7 @@ def get_proposal_excerpt(
             "full_document": False,
             "coverage_ratio": 0.0,
             "section_titles": [],
+            "selected_chunk_ids": [],
         }
 
     total_chars = sum(len(c["content"]) for c in chunks)
@@ -187,6 +188,7 @@ def get_proposal_excerpt(
             "full_document": True,
             "coverage_ratio": 1.0,
             "section_titles": sorted({c["title"] for c in chunks}),
+            "selected_chunk_ids": list(range(len(chunks))),
         }
 
     vectors: np.ndarray = index["vectors"]
@@ -251,6 +253,7 @@ def get_proposal_excerpt(
         "full_document": False,
         "coverage_ratio": selected_chars / total_chars if total_chars else 0.0,
         "section_titles": sorted({chunks[i]["title"] for i in selected}),
+        "selected_chunk_ids": list(selected),
     }
 
 
@@ -353,6 +356,10 @@ def evaluate_proposal(
             "max_score": float(crit.get("max_score", 5.0)),
             "input_coverage": round(excerpts[i]["coverage_ratio"], 3),
             "full_document_input": excerpts[i]["full_document"],
+            # STEP 0 telemetry (FIX README v2): which sections/chunks the model
+            # actually saw, so every finding can be audited against its input.
+            "section_titles": excerpts[i]["section_titles"],
+            "selected_chunk_ids": excerpts[i].get("selected_chunk_ids", []),
             **ev,
         }
 
@@ -382,6 +389,17 @@ def evaluate_proposal(
         else ("high" if confs.count("high") > len(confs) // 2 else "medium")
     )
 
+    # Wrong-document guard: flag (do not block) when the ingested file looks
+    # like an ESR / scoresheet rather than a Part B proposal (FIX README v2 §STEP 0).
+    esr_markers = detect_esr_markers(index["chunks"])
+    ingest_warning = (
+        "The ingested document opens with evaluation-report language "
+        f"({', '.join(esr_markers)}). It may be an ESR / evaluation form rather "
+        "than a Part B proposal — verify the correct file was uploaded."
+        if esr_markers
+        else ""
+    )
+
     result = {
         "proposal_acronym": proposal_acronym,
         "call_id": call_id,
@@ -395,6 +413,7 @@ def evaluate_proposal(
         "overall_confidence": overall_conf,
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "chunk_count": len(index["chunks"]),
+        "ingest_warning": ingest_warning,
         "notes": (
             "Internal pre-screening output. Final judgement rests with human "
             "evaluators. Financial coherence (budget justification, travel and "

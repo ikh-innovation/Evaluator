@@ -114,6 +114,45 @@ def _extract_pdf(data: bytes) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Wrong-document guard
+# ---------------------------------------------------------------------------
+
+# Phrases that appear in an Evaluation Summary Report / evaluation form but not
+# in a Part B proposal. Generic (call- and proposal-agnostic): they describe
+# the evaluation artefact itself, so if the ingested document opens with them
+# the user has almost certainly uploaded an ESR/scoresheet instead of a
+# proposal. See FIX README v2 §STEP 0.
+ESR_MARKER_PATTERNS: tuple[str, ...] = (
+    "evaluation summary report",
+    "proposal evaluation form",
+    "evaluation result",
+    "individual evaluation",
+    "consensus report",
+    "scores awarded",
+    "award criteria scores",
+)
+
+
+def detect_esr_markers(sections: list[dict], probe_chars: int = 4000) -> list[str]:
+    """Return the ESR marker phrases found near the START of the document.
+
+    Only the first `probe_chars` of concatenated section text is scanned, so a
+    proposal that merely quotes "evaluation summary report" deep in an annex is
+    not flagged — an actual ESR leads with these phrases.
+    """
+    head_parts: list[str] = []
+    budget = probe_chars
+    for sec in sections:
+        content = (sec.get("title", "") + "\n" + (sec.get("content") or ""))
+        head_parts.append(content[:budget])
+        budget -= len(content)
+        if budget <= 0:
+            break
+    head = "\n".join(head_parts).lower()
+    return [p for p in ESR_MARKER_PATTERNS if p in head]
+
+
+# ---------------------------------------------------------------------------
 # Heading-aware section extraction
 # ---------------------------------------------------------------------------
 
