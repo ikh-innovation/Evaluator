@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Callable
@@ -12,6 +13,7 @@ from .chunking import chunk_sections
 from .config import (
     CHAT_MODEL,
     EMBED_MODEL,
+    MAX_CHUNKS_PER_SECTION,
     MAX_PROPOSAL_CHARS_INLINE,
     MAX_WORKERS,
     NUM_CTX,
@@ -132,49 +134,124 @@ def build_proposal_index(
         }
 
 
+def _split_aspects(description: str) -> list[str]:
+    """Split a criterion description into its constituent aspects.
+
+    Criterion descriptions enumerate what the criterion covers ("work plan
+    structure, milestones / deliverables, management, risk treatment, ...").
+    Each aspect becomes its own retrieval query so that no single aspect —
+    or a single semantically dominant document section — monopolises the
+    excerpt budget.
+    """
+    parts = re.split(r"[;,]", description or "")
+    return [p.strip() for p in parts if len(p.strip()) > 3]
+
+
+def _chunk_block(c: dict) -> str:
+    page = f", p.{c['page']}" if "page" in c else ""
+    return f"[{c['title']}{page}]\n{c['content']}"
+
+
 def get_proposal_excerpt(
     index: dict[str, Any],
     criterion_name: str,
     criterion_description: str,
     embed_model: str = EMBED_MODEL,
-) -> str:
-    """Select the top-K most relevant chunks for a criterion."""
+) -> dict[str, Any]:
+    """Assemble the proposal input for one criterion.
+
+    Returns {"text", "full_document", "coverage_ratio", "section_titles"}.
+
+    If the whole document fits in the inline budget it is passed verbatim —
+    retrieval can only lose information. Otherwise each aspect of the
+    criterion description issues its own embedding query and the ranked
+    lists are merged round-robin, capped per section title, so that (a)
+    every aspect the criterion needs gets a chance to pull in its sections
+    and (b) one high-similarity section cannot crowd out the rest.
+    """
     chunks: list[dict] = index["chunks"]
     if not chunks:
-        return ""
+        return {
+            "text": "",
+            "full_document": False,
+            "coverage_ratio": 0.0,
+            "section_titles": [],
+        }
+
+    total_chars = sum(len(c["content"]) for c in chunks)
+    overhead = sum(len(c["title"]) + 12 for c in chunks)
+
+    if total_chars + overhead <= MAX_PROPOSAL_CHARS_INLINE:
+        return {
+            "text": "\n\n".join(_chunk_block(c) for c in chunks),
+            "full_document": True,
+            "coverage_ratio": 1.0,
+            "section_titles": sorted({c["title"] for c in chunks}),
+        }
+
     vectors: np.ndarray = index["vectors"]
     parents: list[int] = index["parents"]
-
     embeddings = _embeddings_singleton(embed_model)
-    query_vec = np.asarray(
-        embeddings.embed_query(f"{criterion_name}: {criterion_description}")
-    )
+
+    queries = [f"{criterion_name}: {criterion_description}"]
+    aspects = _split_aspects(criterion_description)
+    if len(aspects) > 1:
+        queries += [f"{criterion_name}: {a}" for a in aspects]
 
     norms = np.linalg.norm(vectors, axis=1)
-    qn = float(np.linalg.norm(query_vec)) or 1.0
-    denom = np.where(norms == 0, 1.0, norms) * qn
-    sims = (vectors @ query_vec) / denom
-
     n_chunks = len(chunks)
-    chunk_sims = np.full(n_chunks, -np.inf)
-    for vec_idx, parent_idx in enumerate(parents):
-        if sims[vec_idx] > chunk_sims[parent_idx]:
-            chunk_sims[parent_idx] = float(sims[vec_idx])
+    rankings: list[list[int]] = []
+    for q in queries:
+        query_vec = np.asarray(embeddings.embed_query(q))
+        qn = float(np.linalg.norm(query_vec)) or 1.0
+        denom = np.where(norms == 0, 1.0, norms) * qn
+        sims = (vectors @ query_vec) / denom
+        chunk_sims = np.full(n_chunks, -np.inf)
+        for vec_idx, parent_idx in enumerate(parents):
+            if sims[vec_idx] > chunk_sims[parent_idx]:
+                chunk_sims[parent_idx] = float(sims[vec_idx])
+        rankings.append(np.argsort(-chunk_sims).tolist())
 
-    top_idx = np.argsort(-chunk_sims)[:PROPOSAL_CHUNK_TOP_K]
-    selected = sorted(top_idx.tolist())
-
-    blocks: list[str] = []
-    total = 0
-    for idx in selected:
-        c = chunks[idx]
-        page = f", p.{c['page']}" if "page" in c else ""
-        block = f"[{c['title']}{page}]\n{c['content']}"
-        if total + len(block) > MAX_PROPOSAL_CHARS_INLINE:
+    # Round-robin merge across the aspect rankings with a per-section cap.
+    selected: list[int] = []
+    seen: set[int] = set()
+    per_section: dict[str, int] = {}
+    budget = 0
+    cursors = [0] * len(rankings)
+    while len(selected) < PROPOSAL_CHUNK_TOP_K:
+        progressed = False
+        for qi, ranking in enumerate(rankings):
+            if len(selected) >= PROPOSAL_CHUNK_TOP_K:
+                break
+            while cursors[qi] < len(ranking):
+                idx = ranking[cursors[qi]]
+                cursors[qi] += 1
+                if idx in seen:
+                    continue
+                title = chunks[idx]["title"]
+                if per_section.get(title, 0) >= MAX_CHUNKS_PER_SECTION:
+                    continue
+                block_len = len(_chunk_block(chunks[idx])) + 2
+                if budget + block_len > MAX_PROPOSAL_CHARS_INLINE:
+                    continue
+                seen.add(idx)
+                selected.append(idx)
+                per_section[title] = per_section.get(title, 0) + 1
+                budget += block_len
+                progressed = True
+                break
+        if not progressed:
             break
-        blocks.append(block)
-        total += len(block) + 2
-    return "\n\n".join(blocks)
+
+    selected.sort()  # restore document order
+    blocks = [_chunk_block(chunks[i]) for i in selected]
+    selected_chars = sum(len(chunks[i]["content"]) for i in selected)
+    return {
+        "text": "\n\n".join(blocks),
+        "full_document": False,
+        "coverage_ratio": selected_chars / total_chars if total_chars else 0.0,
+        "section_titles": sorted({chunks[i]["title"] for i in selected}),
+    }
 
 
 def warmup_llm(chat_model: str = CHAT_MODEL) -> None:
@@ -200,6 +277,7 @@ def evaluate_proposal(
     persist: bool = True,
     chat_model: str = CHAT_MODEL,
     embed_model: str = EMBED_MODEL,
+    call_context: str = "",
 ) -> dict:
     """Full pipeline in one call. Accepts a pre-built chunk_index to skip re-embedding."""
     if chunk_index is not None:
@@ -240,7 +318,7 @@ def evaluate_proposal(
 
     if progress_cb:
         progress_cb("Selecting relevant excerpts per criterion…", 0.25)
-    excerpts: list[str] = [
+    excerpts: list[dict[str, Any]] = [
         get_proposal_excerpt(index, crit["name"], crit.get("description", ""), embed_model=embed_model)
         for crit in criteria
     ]
@@ -253,12 +331,15 @@ def evaluate_proposal(
     def _eval_one(i: int, crit: dict) -> tuple[int, dict]:
         nonlocal completed
         ev = evaluate_criterion(
-            proposal_text=excerpts[i],
+            proposal_text=excerpts[i]["text"],
             criterion_name=crit["name"],
             criterion_description=crit.get("description", ""),
             weight=float(crit["weight"]),
             action_type=action_type,
             chat_model=chat_model,
+            call_context=call_context,
+            full_document=excerpts[i]["full_document"],
+            coverage_ratio=excerpts[i]["coverage_ratio"],
         )
         completed += 1
         if progress_cb:
@@ -270,6 +351,8 @@ def evaluate_proposal(
             "name": crit["name"],
             "weight": float(crit["weight"]),
             "max_score": float(crit.get("max_score", 5.0)),
+            "input_coverage": round(excerpts[i]["coverage_ratio"], 3),
+            "full_document_input": excerpts[i]["full_document"],
             **ev,
         }
 
@@ -312,7 +395,12 @@ def evaluate_proposal(
         "overall_confidence": overall_conf,
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "chunk_count": len(index["chunks"]),
-        "notes": "Internal pre-screening output. Final judgement rests with human evaluators.",
+        "notes": (
+            "Internal pre-screening output. Final judgement rests with human "
+            "evaluators. Financial coherence (budget justification, travel and "
+            "purchase costs, management effort percentages) is NOT assessed by "
+            "this tool and must be checked manually."
+        ),
     }
 
     if persist:

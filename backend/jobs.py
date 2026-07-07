@@ -126,6 +126,7 @@ def enqueue(
     submitted_by: str | None,
     chat_model: str | None = None,
     embed_model: str | None = None,
+    call_context: str | None = None,
 ) -> str:
     """Pickle the raw payload to disk and insert a queued job. Returns job_id.
 
@@ -143,6 +144,7 @@ def enqueue(
         "proposal_bytes": proposal_bytes,
         "proposal_suffix": proposal_suffix,
         "pasted_text": pasted_text,
+        "call_context": call_context,
     }
     with payload_path.open("wb") as fh:
         pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)

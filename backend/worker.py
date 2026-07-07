@@ -72,6 +72,7 @@ def _process_one(job: dict) -> None:
             persist=bool(job["persist"]),
             chat_model=chat_model,
             embed_model=embed_model,
+            call_context=payload.get("call_context") or "",
         )
     except _JobCancelled:
         jobs.mark_failed(job_id, "Cancelled by user.")

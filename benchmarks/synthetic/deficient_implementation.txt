@@ -1,0 +1,28 @@
+7. Quality and efficiency of the implementation
+
+The project (fictional test input) will be implemented by the consortium
+over a period of time appropriate to the ambition of the work. The partners
+will collaborate closely and share responsibilities in a flexible manner,
+adapting the organisation of the work as the project evolves. Work will be
+divided into work packages covering management, research, development and
+testing, which will be defined in detail after the project starts.
+
+The coordinator will ensure smooth communication between the partners
+through regular meetings. Decisions will be taken by consensus whenever
+possible. The consortium believes that its long experience guarantees
+efficient management without the need for heavy formal procedures.
+
+Risks are not expected to be significant given the maturity of the
+underlying technologies. Should unexpected problems arise, the consortium
+will address them promptly and reallocate resources as needed. The partners
+are confident that the objectives will be reached within the planned budget.
+
+The allocation of effort between partners will be balanced and fair,
+reflecting each partner's capabilities and interests. The exact distribution
+of person-months will be refined during the negotiation phase. All partners
+will contribute to all work packages to maximise collaboration and knowledge
+exchange across the consortium.
+
+Deliverables will include reports and demonstrations at appropriate points
+in the project lifetime. A detailed deliverable list and timetable will be
+produced as one of the first tasks of the project.

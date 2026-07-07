@@ -36,75 +36,10 @@ from backend.criteria_io import criteria_to_xlsx_bytes, xlsx_to_criteria  # noqa
 AUTH_PORT = 8502
 
 
-DEFAULT_RESEARCH_CRITERIA: list[dict[str, Any]] = [
-    {
-        "name": "Excellence and potential of disruption",
-        "description": (
-            "Excellence of the overall concept; soundness of approach; "
-            "compliance with topic objectives; advantage over existing "
-            "defence products / disruption potential."
-        ),
-        "weight": 2,
-        "max_score": 5.0,
-    },
-    {
-        "name": "Innovation and technological development",
-        "description": (
-            "Innovation potential, ground-breaking concepts, integration of "
-            "prior R&D while avoiding duplication, spin-off potential."
-        ),
-        "weight": 2,
-        "max_score": 5.0,
-    },
-    {
-        "name": "Competitiveness",
-        "description": (
-            "Competitive advantage vs. existing solutions, market growth "
-            "potential across EU, IP strategy."
-        ),
-        "weight": 1,
-        "max_score": 5.0,
-    },
-    {
-        "name": "EDTIB autonomy and security of supply",
-        "description": (
-            "Contribution to EDTIB autonomy, non-dependency on third "
-            "countries, security of supply, alignment with CDP priorities."
-        ),
-        "weight": 1,
-        "max_score": 5.0,
-    },
-    {
-        "name": "Creation of new cross-border cooperation",
-        "description": (
-            "New cross-border cooperation, especially SMEs and mid-caps with "
-            "substantial participation."
-        ),
-        "weight": 2,
-        "max_score": 5.0,
-    },
-    {
-        "name": "Quality and efficiency of implementation",
-        "description": (
-            "Work plan structure, milestones / deliverables, management, risk "
-            "treatment, allocation of work across the consortium."
-        ),
-        "weight": 1,
-        "max_score": 5.0,
-    },
-]
-
-DEFAULT_DEVELOPMENT_CRITERIA: list[dict[str, Any]] = DEFAULT_RESEARCH_CRITERIA + [
-    {
-        "name": "Contribution to industrial policy objectives",
-        "description": (
-            "Contribution to industrial-policy objectives of the EDF, "
-            "including increase of production capacity in the EU defence industry."
-        ),
-        "weight": 1,
-        "max_score": 5.0,
-    },
-]
+from backend.default_criteria import (  # noqa: E402
+    DEFAULT_DEVELOPMENT_CRITERIA,
+    DEFAULT_RESEARCH_CRITERIA,
+)
 
 OVERALL_THRESHOLD_DEFAULT = 30.0
 
@@ -430,6 +365,7 @@ _DEFAULTS: dict[str, Any] = {
     "criteria": None,
     "action_type": "Research",
     "call_id": "",
+    "call_context": "",
     "proposal_acronym": "",
     "submitted_by": "",
     "selected_chat_model": CHAT_MODEL,
@@ -529,16 +465,19 @@ def _run_to_csv(run: dict[str, Any]) -> bytes:
     ]:
         w.writerow([label, run.get(key, "")])
     w.writerow([])
-    w.writerow(["Criterion", "Score", "Weight", "Max score", "Contribution", "Confidence",
-                "Strengths", "Weaknesses", "Missing evidence", "Evaluator comment", "Recommendations"])
+    w.writerow(["Criterion", "Score", "Band", "Weight", "Max score", "Contribution",
+                "Confidence", "Input coverage", "Strengths", "Weaknesses",
+                "Missing evidence", "Input gaps", "Evaluator comment", "Recommendations"])
     for c in run.get("criteria", []):
         score = c.get("score", 0) or 0
         weight = c.get("weight", 0) or 0
         w.writerow([
-            c.get("name", ""), score, weight, c.get("max_score", ""),
+            c.get("name", ""), score, c.get("band", ""), weight, c.get("max_score", ""),
             round(score * weight, 4), c.get("confidence", ""),
+            "full document" if c.get("full_document_input") else c.get("input_coverage", ""),
             "\n".join(c.get("strengths") or []), "\n".join(c.get("weaknesses") or []),
-            "\n".join(c.get("missing_evidence") or []), c.get("evaluator_comment", ""),
+            "\n".join(c.get("missing_evidence") or []),
+            "\n".join(c.get("input_gaps") or []), c.get("evaluator_comment", ""),
             "\n".join(c.get("recommendations") or []),
         ])
     return ("﻿" + out.getvalue()).encode("utf-8")
@@ -666,10 +605,17 @@ def _run_to_pdf(run: dict[str, Any]) -> bytes:
         story.append(Paragraph("Strengths", _PDF_LABEL))
         story.append(_pdf_bullets(c.get("strengths")))
         story.append(Paragraph("Weaknesses", _PDF_LABEL))
-        story.append(_pdf_bullets(c.get("weaknesses")))
+        story.append(_pdf_bullets(
+            c.get("weaknesses") or ["No significant weaknesses identified."]
+        ))
         if c.get("missing_evidence"):
             story.append(Paragraph("Missing evidence", _PDF_LABEL))
             story.append(_pdf_bullets(c.get("missing_evidence")))
+        if c.get("input_gaps"):
+            story.append(Paragraph(
+                "Input gaps (not seen by the model — not penalised)", _PDF_LABEL,
+            ))
+            story.append(_pdf_bullets(c.get("input_gaps")))
         if c.get("evaluator_comment"):
             story.append(Paragraph("Evaluator comment", _PDF_LABEL))
             story.append(Paragraph(c["evaluator_comment"], _PDF_BULLET))
@@ -696,7 +642,16 @@ def _render_criterion_card(c: dict) -> None:
     head = st.columns([5, 1, 1, 1])
     with head[0]:
         st.markdown(f"**{c['name']}**")
-        st.caption(f"Confidence: {c.get('confidence', '—').title()}")
+        band = (c.get("band") or "").strip()
+        coverage = c.get("input_coverage")
+        caption = f"Confidence: {c.get('confidence', '—').title()}"
+        if band:
+            caption += f" · Band: {band.title()}"
+        if c.get("full_document_input"):
+            caption += " · Input: full document"
+        elif coverage is not None:
+            caption += f" · Input: excerpts (~{coverage * 100:.0f}% of document)"
+        st.caption(caption)
     head[1].markdown(
         f"<small>Score</small><br>"
         f"<span style='border:1px solid #000;font-weight:700;"
@@ -714,11 +669,15 @@ def _render_criterion_card(c: dict) -> None:
                 st.markdown(f"- {s}")
         with cols[1]:
             st.markdown("**Weaknesses**")
-            for s in c.get("weaknesses") or ["—"]:
+            for s in c.get("weaknesses") or ["No significant weaknesses identified."]:
                 st.markdown(f"- {s}")
         with cols[2]:
             st.markdown("**Missing evidence**")
             for s in c.get("missing_evidence") or ["—"]:
+                st.markdown(f"- {s}")
+        if c.get("input_gaps"):
+            st.markdown("**Input gaps** *(not seen by the model — not penalised)*")
+            for s in c["input_gaps"]:
                 st.markdown(f"- {s}")
         if c.get("evaluator_comment"):
             st.markdown("**Evaluator comment**")
@@ -1114,6 +1073,20 @@ with st.sidebar:
         "Proposal acronym *", value=st.session_state.proposal_acronym,
         placeholder="e.g. SWARMER",
     )
+    st.session_state.call_context = st.text_area(
+        "Call topic context (optional)",
+        value=st.session_state.call_context,
+        height=120,
+        placeholder=(
+            "Paste the call topic description, functional requirements and "
+            "expected impact here. The evaluator judges technical fit against "
+            "this text — without it, only the proposal itself is assessed."
+        ),
+        help=(
+            "Taken from the call fiche / topic description of the specific "
+            "call. Supplied per run — never baked into the tool."
+        ),
+    )
     new_action = st.selectbox(
         "Action type", ["Research", "Development"],
         index=0 if st.session_state.action_type == "Research" else 1,
@@ -1375,6 +1348,7 @@ with tab_evaluate:
                     submitted_by=st.session_state.submitted_by.strip(),
                     chat_model=st.session_state.selected_chat_model,
                     embed_model=st.session_state.selected_embed_model,
+                    call_context=st.session_state.call_context.strip() or None,
                 )
                 st.session_state.my_job_ids = list(st.session_state.my_job_ids) + [job_id]
                 st.toast(

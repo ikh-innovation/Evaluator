@@ -24,11 +24,16 @@ OLLAMA_BASE_URL: str = _require_env("OLLAMA_BASE_URL")
 CHAT_MODEL: str = _require_env("EDF_CHAT_MODEL")
 EMBED_MODEL: str = _require_env("EDF_EMBED_MODEL")
 
-PROPOSAL_CHUNK_TOP_K: int = int(os.environ.get("EDF_PROPOSAL_TOP_K", "4"))
+PROPOSAL_CHUNK_TOP_K: int = int(os.environ.get("EDF_PROPOSAL_TOP_K", "16"))
 CHUNK_SIZE_CHARS: int = int(os.environ.get("EDF_CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP_CHARS: int = int(os.environ.get("EDF_CHUNK_OVERLAP", "150"))
-MAX_PROPOSAL_CHARS_INLINE: int = int(os.environ.get("EDF_MAX_INLINE_CHARS", "5000"))
+MAX_PROPOSAL_CHARS_INLINE: int = int(os.environ.get("EDF_MAX_INLINE_CHARS", "24000"))
 MAX_EMBED_CHARS: int = int(os.environ.get("EDF_MAX_EMBED_CHARS", "2500"))
+# Retrieval diversity: at most this many chunks per section title, so one
+# semantically dominant section cannot crowd out everything else.
+MAX_CHUNKS_PER_SECTION: int = int(os.environ.get("EDF_MAX_CHUNKS_PER_SECTION", "3"))
+# Cap on runtime-supplied call/topic context injected into each criterion prompt.
+MAX_CALL_CONTEXT_CHARS: int = int(os.environ.get("EDF_MAX_CALL_CONTEXT_CHARS", "8000"))
 
 REQUEST_TIMEOUT_S: float = float(os.environ.get("EDF_REQUEST_TIMEOUT", "600"))
 
@@ -41,7 +46,8 @@ NUM_GPU: int = int(os.environ.get("EDF_NUM_GPU", "99"))
 # GPU device index to use (0 = first GPU, e.g. RTX 5070).
 MAIN_GPU: int = int(os.environ.get("EDF_MAIN_GPU", "0"))
 
-# Ollama context window (tokens). Actual prompts here are small (~2-2.5k
-# tokens worst case); capping this avoids Ollama's auto-sizing (observed
-# defaulting to 262144) wasting VRAM/time on an oversized KV-cache.
-NUM_CTX: int = int(os.environ.get("EDF_NUM_CTX", "8192"))
+# Ollama context window (tokens). Sized for the worst-case criterion prompt:
+# ~24k chars of proposal excerpts + ~8k chars of call context + instructions
+# + JSON output ≈ 11k tokens. Capping this avoids Ollama's auto-sizing
+# (observed defaulting to 262144) wasting VRAM/time on an oversized KV-cache.
+NUM_CTX: int = int(os.environ.get("EDF_NUM_CTX", "16384"))

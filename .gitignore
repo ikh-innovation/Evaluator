@@ -210,3 +210,8 @@ data/runs.sqlite
 
 # Presentations / local docs
 *.pptx
+
+# Benchmark data — proposals and official ESRs are sensitive; results are local
+benchmarks/pairs/*
+!benchmarks/pairs/.gitkeep
+benchmarks/results/

@@ -35,20 +35,47 @@ def extract_text(data: bytes, suffix: str) -> str:
     raise ValueError(f"Unsupported file type: {suffix}")
 
 
+def _iter_docx_blocks(doc):
+    """Yield Paragraph and Table objects in true document order.
+
+    python-docx exposes `doc.paragraphs` and `doc.tables` as separate lists,
+    which loses interleaving — tables (effort, risk, budget, deliverables…)
+    would detach from the section they belong to. Walking the body XML keeps
+    each table with its surrounding text.
+    """
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            yield Paragraph(child, doc)
+        elif child.tag == qn("w:tbl"):
+            yield Table(child, doc)
+
+
+def _table_lines(table) -> list[str]:
+    lines: list[str] = []
+    for row in table.rows:
+        cells = [c.text.strip() for c in row.cells]
+        if any(cells):
+            lines.append(" | ".join(cells))
+    return lines
+
+
 def _extract_docx(data: bytes) -> str:
     from docx import Document
+    from docx.text.paragraph import Paragraph
 
     doc = Document(io.BytesIO(data))
     parts: list[str] = []
-    for p in doc.paragraphs:
-        text = p.text.strip()
-        if text:
-            parts.append(text)
-    for table in doc.tables:
-        for row in table.rows:
-            cells = [c.text.strip() for c in row.cells]
-            if any(cells):
-                parts.append(" | ".join(cells))
+    for block in _iter_docx_blocks(doc):
+        if isinstance(block, Paragraph):
+            text = block.text.strip()
+            if text:
+                parts.append(text)
+        else:
+            parts.extend(_table_lines(block))
     return "\n".join(parts)
 
 
@@ -125,12 +152,15 @@ def extract_sections_from_path(path: str | Path) -> list[dict]:
 # ---- DOCX heading-style extraction ---------------------------------------
 
 def _docx_sections_by_style(data: bytes) -> list[dict]:
-    """Group DOCX paragraphs by their parent Heading 1/2/3 style.
+    """Group DOCX content by its parent Heading 1/2/3 style.
 
-    Tables are appended to the most recent section as pipe-joined rows.
+    Paragraphs and tables are walked in true document order, so each table
+    (effort allocation, risk register, deliverables, budget…) lands in the
+    section it actually belongs to as pipe-joined rows.
     Returns [] if no styled headings are detected (caller falls back).
     """
     from docx import Document
+    from docx.text.paragraph import Paragraph
 
     doc = Document(io.BytesIO(data))
     sections: list[dict] = [{"title": "Preamble", "content": ""}]
@@ -142,27 +172,20 @@ def _docx_sections_by_style(data: bytes) -> list[dict]:
         else:
             sections[-1]["content"] = text
 
-    # Walk paragraphs in document order. Tables are interleaved by python-docx
-    # only via the underlying XML; for simplicity we append all tables at the
-    # end of the document under their nearest preceding heading.
-    for para in doc.paragraphs:
-        text = para.text.strip()
-        if not text:
-            continue
-        style = (para.style.name or "").lower() if para.style else ""
-        if style.startswith("heading"):
-            saw_heading = True
-            sections.append({"title": text, "content": "", "style": style})
+    for block in _iter_docx_blocks(doc):
+        if isinstance(block, Paragraph):
+            text = block.text.strip()
+            if not text:
+                continue
+            style = (block.style.name or "").lower() if block.style else ""
+            if style.startswith("heading"):
+                saw_heading = True
+                sections.append({"title": text, "content": "", "style": style})
+            else:
+                _push(text)
         else:
-            _push(text)
-
-    # Append tables to the end of the last section (cheap heuristic; good
-    # enough for evaluation purposes).
-    for table in doc.tables:
-        for row in table.rows:
-            cells = [c.text.strip() for c in row.cells]
-            if any(cells):
-                _push(" | ".join(cells))
+            for line in _table_lines(block):
+                _push(line)
 
     if not saw_heading:
         return []
