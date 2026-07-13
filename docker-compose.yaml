@@ -1,3 +1,4 @@
+#RUN FOR PROD: docker compose -f docker-compose.yml up -d
 services:
   data:
     build:
