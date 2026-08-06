@@ -51,7 +51,13 @@ backend/
   criteria_io.py  — XLSX import / export for criteria
   db.py           — SQLite run history (save, list, get, delete, wipe)
 frontend/
-  app.py          — Streamlit UI
+  app.py          — Streamlit UI (header, evaluate / history / insights tabs, queue bar)
+  theme.py        — design system: brand palette, stylesheet, small HTML components
+  charts.py       — Altair chart builders (score profile, contribution, trends)
+  pdf_report.py   — print-quality PDF report (ReportLab, vector charts)
+  ikh_logo.png    — brand mark; cropped at runtime for the header and the PDF
+.streamlit/
+  config.toml     — native Streamlit theme tokens (must match theme.py)
 data/
   runs.sqlite     — run history (auto-created)
 input_docs/       — reference documents (not required for evaluation)
@@ -80,3 +86,13 @@ All settings can be overridden via environment variables:
 - Each proposal is embedded fresh per run using a numpy in-memory index — no persistent vector store.
 - Criteria and weights are fully configurable in the sidebar or via XLSX upload/download.
 - Pasted-text runs are not saved to history.
+
+### UI conventions
+
+- Palette is taken from the logo: navy `#202039`, amber `#F08003`, white. Amber marks
+  the single primary action on a screen; red is reserved for destructive actions
+  (Wipe history, Delete run); green/red appear only on a pass/fail verdict.
+- `frontend/theme.py` and `.streamlit/config.toml` both hold colour values — change
+  them together.
+- Results, history detail and the PDF all read from one renderer / one template, so
+  the three can't drift apart.

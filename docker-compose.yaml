@@ -5,6 +5,41 @@ services:
     volumes:
       - ./data:/data
 
+  # Local LLM host. Pinned to a single GPU (see EDF_MAIN_GPU in .env) and tuned
+  # for one long-context model resident in VRAM for the whole session:
+  #   KEEP_ALIVE=-1     never unload between criteria (cold reload is ~30 s)
+  #   FLASH_ATTENTION   faster prefill on the long excerpt prompts
+  #   KV_CACHE_TYPE     q8_0 halves KV VRAM, paying for NUM_PARALLEL=2
+  #   NUM_PARALLEL=2    matches EDF_MAX_WORKERS=2 so both criterion threads
+  #                     run concurrently instead of queueing
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+      OLLAMA_KEEP_ALIVE: "-1"
+      OLLAMA_FLASH_ATTENTION: "1"
+      OLLAMA_KV_CACHE_TYPE: q8_0
+      OLLAMA_NUM_PARALLEL: "2"
+      OLLAMA_MAX_LOADED_MODELS: "2"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${EDF_MAIN_GPU:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
   auth:
     build:
       context: .
@@ -24,6 +59,8 @@ services:
     depends_on:
       data:
         condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
@@ -43,6 +80,8 @@ services:
     depends_on:
       data:
         condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
     restart: unless-stopped
 
   backend:
@@ -60,4 +99,13 @@ services:
     depends_on:
       data:
         condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  # Pre-populated with the qwen3 models; kept out of the compose lifecycle so
+  # `docker compose down -v` cannot wipe ~20 GB of downloads.
+  ollama_models:
+    external: true
+    name: ollama_models

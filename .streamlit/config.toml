@@ -1,0 +1,18 @@
+# Native Streamlit theme tokens, taken from the IKH logo.
+# These drive the widget internals (focus rings, selection, spinners, chart
+# defaults) that CSS can only reach awkwardly; frontend/theme.py layers the
+# rest of the design system on top.
+[theme]
+base = "light"
+primaryColor = "#F08003"           # amber accent
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F6F7FA"
+textColor = "#202039"              # navy ink
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = true
+
+[browser]
+gatherUsageStats = false

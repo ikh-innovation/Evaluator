@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import csv
 import io
@@ -11,36 +11,26 @@ from typing import Any
 
 import ollama
 import streamlit as st
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.units import mm
-from reportlab.platypus import (
-    ListFlowable,
-    ListItem,
-    Paragraph,
-    SimpleDocTemplate,
-    Spacer,
-    Table,
-    TableStyle,
-)
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+HERE = Path(__file__).resolve().parent
+for _path in (str(ROOT), str(HERE)):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 from backend import auth, db, jobs  # noqa: E402
 from backend.config import CHAT_MODEL, EMBED_MODEL, OLLAMA_BASE_URL  # noqa: E402
 from backend.criteria_io import criteria_to_xlsx_bytes, xlsx_to_criteria  # noqa: E402
-
-AUTH_PORT = 8502
-
-
 from backend.default_criteria import (  # noqa: E402
     DEFAULT_DEVELOPMENT_CRITERIA,
     DEFAULT_RESEARCH_CRITERIA,
 )
 
+import charts  # noqa: E402
+import theme  # noqa: E402
+from pdf_report import run_to_pdf  # noqa: E402
+
+AUTH_PORT = 8502
 OVERALL_THRESHOLD_DEFAULT = 30.0
 
 
@@ -53,14 +43,16 @@ class Criterion:
 
 
 # ---------------------------------------------------------------------------
-# Page config
+# Page config + theme
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
     page_title="EDF Proposal Evaluator",
-    page_icon=":bar_chart:",
+    page_icon=str(theme.LOGO_PATH) if theme.LOGO_PATH.exists() else ":bar_chart:",
     layout="wide",
 )
+
+theme.inject_css()
 
 # ---------------------------------------------------------------------------
 # Login gate — nothing below renders without a valid session from the auth app.
@@ -73,289 +65,32 @@ if not st.session_state.get("authed_username"):
         st.session_state.authed_username = _username
         st.session_state.authed_sid = _sid
     else:
-        st.title("EDF Proposal Evaluator")
-        st.warning("Please log in first.")
-        try:
-            _host_header = st.context.headers.get("host")
-        except Exception:
-            _host_header = None
-        _login_url = auth.peer_url(_host_header, AUTH_PORT)
-        st.markdown(
-            f'<a href="{_login_url}" target="_self" '
-            'style="display:inline-block;padding:.5rem 1rem;border:1px solid #000;'
-            'background:#000;color:#fff;text-decoration:none;font-weight:600;">'
-            "Go to login →</a>",
-            unsafe_allow_html=True,
-        )
+        _gate = st.columns([1, 1.1, 1])[1]
+        with _gate:
+            st.markdown("<div style='height:2.2rem'></div>", unsafe_allow_html=True)
+            st.image(theme.logo_bytes(with_tagline=True), width=150)
+            st.markdown(
+                '<div class="edf-apptitle" style="margin-top:.8rem">'
+                "EDF Proposal Evaluator</div>"
+                '<div class="edf-appsub">Internal pre-screening for European '
+                "Defence Fund Part B proposals</div>",
+                unsafe_allow_html=True,
+            )
+            st.write("")
+            try:
+                _host_header = st.context.headers.get("host")
+            except Exception:
+                _host_header = None
+            _login_url = auth.peer_url(_host_header, AUTH_PORT)
+            st.markdown(
+                f'<a href="{_login_url}" target="_self" style="display:block;'
+                f"padding:.6rem 1rem;border-radius:4px;background:{theme.AMBER};"
+                'color:#fff;text-decoration:none;font-weight:600;text-align:center;'
+                'font-size:.9rem;">Sign in to continue →</a>',
+                unsafe_allow_html=True,
+            )
+            st.caption("Your session has expired or you have not signed in yet.")
         st.stop()
-
-# ---------------------------------------------------------------------------
-# CSS
-# ---------------------------------------------------------------------------
-
-st.markdown("""
-<style>
-/* ── Brutalist palette: white/black/gray only. Red is reserved for errors
-   and destructive actions (Wipe history, Delete this run) — nothing else. ── */
-button[data-testid="stBaseButton-primary"] {
-    background-color: #dc2626 !important;
-    border: 1px solid #dc2626 !important;
-    border-radius: 0 !important;
-    color: #fff !important;
-    box-shadow: none !important;
-}
-button[data-testid="stBaseButton-primary"]:hover {
-    background-color: #991b1b !important;
-    border-color: #991b1b !important;
-}
-button[data-testid="stBaseButton-primary"]:disabled {
-    background-color: #d4d4d4 !important;
-    border-color: #d4d4d4 !important;
-    color: #737373 !important;
-}
-/* The main non-destructive CTA ("Queue evaluation"): solid black, marked via
-   an adjacent invisible span since Streamlit gives buttons no other stable,
-   CSS-selectable hook — same :has()-on-column technique used below for the
-   queue-bar chip/× color-linking. */
-[data-testid="stColumn"]:has(.edf-cta-marker) button[data-testid="stBaseButton-secondary"] {
-    background: #000 !important;
-    color: #fff !important;
-    border-color: #000 !important;
-}
-[data-testid="stColumn"]:has(.edf-cta-marker) button[data-testid="stBaseButton-secondary"]:hover {
-    background: #262626 !important;
-}
-[data-testid="stColumn"]:has(.edf-cta-marker) button[data-testid="stBaseButton-secondary"]:disabled {
-    background: #d4d4d4 !important;
-    color: #737373 !important;
-    border-color: #d4d4d4 !important;
-}
-
-/* Model selectors are locked (disabled) so the UI still shows which models
-   are in use, but the dropdown arrow — a clickability affordance — is
-   removed entirely rather than just grayed out, since it's no longer an
-   interactive control. Marker + :has() on the enclosing row scopes this to
-   just these two selectboxes, not the Action type dropdown elsewhere. */
-[data-testid="stHorizontalBlock"]:has(.edf-model-lock-marker) [data-testid="stSelectbox"] svg {
-    display: none !important;
-}
-
-/* ── Queue status bar ─────────────────────────────────────────────────── */
-/* position: sticky, not fixed — this is the actual correct tool here.
-   The bar is the last element on the page, which scrolls at the document
-   level (not an inner scroll box), so sticky naturally inherits its
-   horizontal position from normal document flow — the same flow that
-   already correctly excludes the sidebar and re-adjusts live when it's
-   dragged or collapsed, no hardcoded width/JS measurement needed. Two
-   earlier attempts (a containing-block transform trick, then a hardcoded
-   fixed-position offset) each fixed one dimension of this while breaking
-   the other; sticky avoids the tradeoff entirely. */
-.edf-queue-bar {
-    position: sticky;
-    bottom: 1.25rem;
-    z-index: 999;
-    display: flex;
-    align-items: center;
-    gap: .9rem;
-    padding: .6rem 1rem;
-    border: 1px solid #93c5fd;
-    background: #ffffff;
-    font-size: .92rem;
-}
-.edf-queue-bar.idle {
-    color: #60a5fa;
-    border-color: #bfdbfe;
-}
-.edf-queue-bar.busy {
-    border-bottom: none;
-    background: #eff6ff;
-    color: #1e40af;
-}
-.edf-queue-bar .dot {
-    width: 10px; height: 10px; border-radius: 50%;
-    border: 2px solid #3b82f6; background: transparent; flex-shrink: 0;
-}
-.edf-queue-bar.busy .dot {
-    background: #3b82f6;
-}
-.edf-queue-bar .summary  { font-weight: 700; white-space: nowrap; }
-.edf-queue-bar .msg      { color: #1e40af; font-size: .82rem;
-                            flex: 1; min-width: 0;
-                            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.edf-queue-bar .progress { height: 6px; flex: 0 0 160px; max-width: 28%;
-                            background: #dbeafe; overflow: hidden; }
-.edf-queue-bar .progress > div {
-    height: 100%; background: #3b82f6; transition: width .4s ease;
-}
-
-/* ── Sliding chip strip — sticky directly above the bar, same reasoning. */
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) {
-    position: sticky !important;
-    bottom: 4rem !important;
-    z-index: 999 !important;
-    flex-wrap: nowrap !important;
-    overflow-x: auto;
-    overflow-y: visible;
-    scroll-behavior: smooth;
-    align-items: center !important;
-    gap: .55rem !important;
-    padding: .6rem .9rem .7rem .9rem;
-    background: #eff6ff;
-    border: 1px solid #93c5fd;
-    border-top: 1px dashed #bfdbfe;
-    scrollbar-width: thin;
-    scrollbar-color: #3b82f6 #dbeafe;
-}
-[data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar { height: 6px; }
-[data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar-track { background: #dbeafe; }
-[data-testid="stHorizontalBlock"]:has(.qbar-chip)::-webkit-scrollbar-thumb { background: #3b82f6; }
-
-/* Each column = one (chip + ×) pair. Shrinks to content; kids in a single
-   horizontal row with zero gap so the chip and × visually become one pill. */
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) > [data-testid="stColumn"] {
-    flex: 0 0 auto !important;
-    min-width: 0 !important;
-    width: auto !important;
-    padding: 0 !important;
-}
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) > [data-testid="stColumn"] > div {
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: stretch !important;
-    gap: 0 !important;
-    flex-wrap: nowrap !important;
-}
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) > [data-testid="stColumn"] > div > * {
-    width: auto !important;
-    flex: 0 0 auto !important;
-}
-
-/* Flatten ALL of Streamlit's inner wrappers so chip & × align exactly. */
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stElementContainer"] {
-    padding: 0 !important;
-    margin: 0 !important;
-    display: inline-flex !important;
-    align-items: stretch !important;
-}
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stMarkdown"],
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stMarkdownContainer"] {
-    padding: 0 !important;
-    margin: 0 !important;
-    line-height: 1 !important;
-    display: inline-flex !important;
-    align-items: stretch !important;
-}
-/* The markdown container's internal <p> wraps the "…"/"🔒" chips — flatten
-   it the same way the button's <p> is flattened, so both sit at the same
-   baseline/height as the × button. */
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stMarkdownContainer"] p {
-    margin: 0 !important;
-    padding: 0 !important;
-    display: contents !important;
-}
-
-/* ── The chip — left half of the pill. ─────────────────────────────────
-   All variant colors live on the chip; CSS :has() on the column then
-   propagates the same colors to the × button so they always agree. */
-.qbar-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: .4rem;
-    height: 2rem;
-    padding: 0 .55rem 0 .85rem;
-    border: 1px solid #000;
-    border-right: none;
-    background: #ffffff;
-    color: #000;
-    font-size: .88rem;
-    line-height: 1;
-    white-space: nowrap;
-}
-.qbar-chip.running   { background: #000; color: #fff; }
-.qbar-chip.mine      { font-weight: 700; }
-.qbar-chip.cancelling{ border-color: #a3a3a3; background: #f5f5f5; color: #737373;
-                        text-decoration: line-through; opacity: .7; }
-.qbar-chip code      { background: transparent; padding: 0; color: inherit; font-size: .8rem; opacity: .75; }
-.qbar-submitter      { font-size: .75rem; opacity: .7; font-style: italic; margin-left: .15rem; }
-
-/* ── The × — right half of the same pill. Matches the chip's height,
-   border, and background; no rounded corners under the brutalist palette. */
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button {
-    height: 2rem !important;
-    min-height: 2rem !important;
-    width: 1.55rem !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    line-height: 1 !important;
-    font-size: .85rem !important;
-    font-weight: 500 !important;
-    border: 1px solid #000 !important;
-    border-left: none !important;
-    background: #ffffff !important;
-    color: #000 !important;
-    cursor: pointer;
-    box-shadow: none !important;
-    transition: color .12s, background-color .12s, border-color .12s;
-}
-/* The button's internal <p> wraps the "✕" label — flatten it. */
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button p,
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button div {
-    margin: 0 !important;
-    padding: 0 !important;
-    line-height: 1 !important;
-    font-size: inherit !important;
-    font-weight: inherit !important;
-    color: inherit !important;
-}
-
-/* Variant colors flow from the chip to the × via :has() on the column. */
-[data-testid="stColumn"]:has(.qbar-chip.running) [data-testid="stButton"] > button {
-    background: #000 !important;
-    border-color: #000 !important;
-    color: #fff !important;
-}
-
-/* Hover — only the × box changes, never the chip. Reserved destructive red. */
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button:hover {
-    color: #fff !important;
-    background: #dc2626 !important;
-    border-color: #dc2626 !important;
-}
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button:focus,
-[data-testid="stHorizontalBlock"]:has(.qbar-chip) [data-testid="stButton"] > button:active {
-    outline: none !important;
-    box-shadow: none !important;
-}
-
-/* Cancelling: a static "…" pill stamped on the right, same dimensions. */
-.qbar-cancel-pending {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.55rem;
-    height: 2rem;
-    border: 1px solid #a3a3a3;
-    border-left: none;
-    background: #f5f5f5;
-    color: #737373;
-    font-size: .85rem;
-    opacity: .85;
-}
-.qbar-cancel-locked {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.55rem;
-    height: 2rem;
-    border: 1px solid #a3a3a3;
-    border-left: none;
-    background: #f5f5f5;
-    color: #737373;
-    font-size: .78rem;
-    opacity: .7;
-}
-</style>
-""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
 # Session state bootstrap
@@ -400,6 +135,7 @@ is_admin = st.session_state.authed_username.strip().lower() == "admin"
 if st.session_state.criteria is None:
     st.session_state.criteria = [Criterion(**c) for c in DEFAULT_RESEARCH_CRITERIA]
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -410,6 +146,16 @@ def _criterion_dicts() -> list[dict[str, Any]]:
          "weight": c.weight, "max_score": c.max_score}
         for c in st.session_state.criteria
     ]
+
+
+def _escape(text: Any) -> str:
+    return (
+        str(text if text is not None else "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
 
 
 def _param_count_b(size_str: str | None) -> float:
@@ -483,224 +229,240 @@ def _run_to_csv(run: dict[str, Any]) -> bytes:
     return ("﻿" + out.getvalue()).encode("utf-8")
 
 
-_PDF_STYLES = getSampleStyleSheet()
-_PDF_TITLE = ParagraphStyle(
-    "EDFTitle", parent=_PDF_STYLES["Title"], fontSize=18, spaceAfter=4, textColor=colors.black,
-)
-_PDF_CAPTION = ParagraphStyle(
-    "EDFCaption", parent=_PDF_STYLES["Normal"], fontSize=9,
-    textColor=colors.HexColor("#525252"), spaceAfter=12,
-)
-_PDF_H2 = ParagraphStyle(
-    "EDFH2", parent=_PDF_STYLES["Heading2"], fontSize=13, spaceBefore=14, spaceAfter=6,
-    textColor=colors.black,
-)
-_PDF_H3 = ParagraphStyle(
-    "EDFH3", parent=_PDF_STYLES["Heading3"], fontSize=11, spaceBefore=10, spaceAfter=4,
-    textColor=colors.black,
-)
-_PDF_BODY = ParagraphStyle("EDFBody", parent=_PDF_STYLES["Normal"], fontSize=10, leading=14)
-_PDF_BULLET = ParagraphStyle("EDFBullet", parent=_PDF_STYLES["Normal"], fontSize=9.5, leading=13)
-_PDF_LABEL = ParagraphStyle(
-    "EDFLabel", parent=_PDF_BULLET, fontName="Helvetica-Bold", spaceBefore=4,
-)
-_PDF_FOOTNOTE = ParagraphStyle(
-    "EDFFootnote", parent=_PDF_STYLES["Normal"], fontSize=8, textColor=colors.HexColor("#737373"),
-)
-_PDF_TABLE_STYLE = TableStyle([
-    ("BOX", (0, 0), (-1, -1), 0.75, colors.black),
-    ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#93c5fd")),
-    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eff6ff")),
-    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-    ("FONTSIZE", (0, 0), (-1, -1), 9),
-    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-    ("TOPPADDING", (0, 0), (-1, -1), 5),
-    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-])
+@st.cache_data(ttl=900, max_entries=24, show_spinner=False)
+def _pdf_bytes(run: dict[str, Any]) -> bytes:
+    """Cached PDF render.
+
+    st.download_button needs the bytes up front, and the result panel is a
+    2-second fragment — without this the whole report would be re-laid-out
+    on every refresh tick.
+    """
+    return run_to_pdf(run)
 
 
-def _pdf_bullets(items: list[str] | None) -> ListFlowable | Paragraph:
-    items = [i for i in (items or []) if i]
-    if not items:
-        return Paragraph("—", _PDF_BULLET)
-    return ListFlowable(
-        [ListItem(Paragraph(i, _PDF_BULLET)) for i in items],
-        bulletType="bullet", start="circle", leftIndent=12,
-    )
-
-
-def _run_to_pdf(run: dict[str, Any]) -> bytes:
-    """Render a run into a single, consistently-formatted PDF report —
-    same template every time, so exports are directly comparable."""
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buf, pagesize=A4,
-        topMargin=18 * mm, bottomMargin=18 * mm, leftMargin=18 * mm, rightMargin=18 * mm,
-        title=f"Evaluation — {run.get('proposal_acronym', 'Proposal')}",
-    )
-    story: list = []
-
-    story.append(Paragraph(
-        f"{run.get('proposal_acronym', '—')} · {run.get('call_id', '—')}", _PDF_TITLE,
-    ))
-    story.append(Paragraph(
-        f"Generated: {run.get('generated_at', '—')} &nbsp;&nbsp;·&nbsp;&nbsp; "
-        f"Action type: {run.get('action_type', '—')} &nbsp;&nbsp;·&nbsp;&nbsp; "
-        f"Confidence: {run.get('overall_confidence', '—')}",
-        _PDF_CAPTION,
-    ))
-
-    weighted = run.get("weighted_total", 0.0)
-    max_weighted = run.get("max_weighted_total", 1.0) or 1.0
+def _verdict(run: dict[str, Any]) -> tuple[float, float, float | None, bool, float]:
+    """(weighted, max_weighted, threshold, passed, fraction-of-max)."""
+    weighted = float(run.get("weighted_total") or 0.0)
+    max_weighted = float(run.get("max_weighted_total") or 0.0) or 1.0
     threshold = run.get("overall_threshold")
+    threshold = float(threshold) if threshold is not None else None
     passed = (threshold is None) or (weighted >= threshold)
-    band = run.get("predicted_band", "—")
-
-    summary_table = Table(
-        [
-            ["Weighted total", "Threshold", "Pass / Fail", "Predicted band"],
-            [
-                f"{weighted:g} / {max_weighted:g}",
-                f"{threshold:g}" if threshold is not None else "—",
-                "PASS" if passed else "FAIL",
-                band,
-            ],
-        ],
-        colWidths=[41 * mm] * 4,
-    )
-    summary_table.setStyle(_PDF_TABLE_STYLE)
-    summary_table.hAlign = "LEFT"
-    story.append(summary_table)
-    story.append(Spacer(1, 14))
-
-    story.append(Paragraph("ESR-style summary", _PDF_H2))
-    story.append(Paragraph((run.get("esr_style_summary") or "—").replace("\n", "<br/>"), _PDF_BODY))
-
-    criteria = run.get("criteria", [])
-    story.append(Paragraph("Per-criterion breakdown", _PDF_H2))
-
-    crit_rows = [["Criterion", "Score", "Weight", "Contribution", "Confidence"]]
-    for c in criteria:
-        score = c.get("score", 0) or 0
-        weight = c.get("weight", 0) or 0
-        crit_rows.append([
-            c.get("name", ""), f"{score:g}", f"×{weight:g}",
-            f"{score * weight:g}", (c.get("confidence") or "—").title(),
-        ])
-    crit_table = Table(
-        crit_rows, colWidths=[70 * mm, 22 * mm, 22 * mm, 28 * mm, 27 * mm], repeatRows=1,
-    )
-    crit_table.setStyle(_PDF_TABLE_STYLE)
-    crit_table.hAlign = "LEFT"
-    story.append(crit_table)
-    story.append(Spacer(1, 10))
-
-    for c in criteria:
-        score = c.get("score", 0) or 0
-        max_score = c.get("max_score", 5.0)
-        weight = c.get("weight", 0) or 0
-        story.append(Paragraph(
-            f"{c.get('name', '—')} — {score:g}/{max_score:g} · weight ×{weight:g}", _PDF_H3,
-        ))
-        story.append(Paragraph("Strengths", _PDF_LABEL))
-        story.append(_pdf_bullets(c.get("strengths")))
-        story.append(Paragraph("Weaknesses", _PDF_LABEL))
-        story.append(_pdf_bullets(
-            c.get("weaknesses") or ["No significant weaknesses identified."]
-        ))
-        if c.get("missing_evidence"):
-            story.append(Paragraph("Missing evidence", _PDF_LABEL))
-            story.append(_pdf_bullets(c.get("missing_evidence")))
-        if c.get("input_gaps"):
-            story.append(Paragraph(
-                "Input gaps (not seen by the model — not penalised)", _PDF_LABEL,
-            ))
-            story.append(_pdf_bullets(c.get("input_gaps")))
-        if c.get("evaluator_comment"):
-            story.append(Paragraph("Evaluator comment", _PDF_LABEL))
-            story.append(Paragraph(c["evaluator_comment"], _PDF_BULLET))
-        if c.get("recommendations"):
-            story.append(Paragraph("Recommendations", _PDF_LABEL))
-            story.append(_pdf_bullets(c.get("recommendations")))
-        story.append(Spacer(1, 8))
-
-    story.append(Spacer(1, 10))
-    story.append(Paragraph(
-        run.get("notes", "Internal pre-screening output. Final judgement rests with human evaluators."),
-        _PDF_FOOTNOTE,
-    ))
-
-    doc.build(story)
-    return buf.getvalue()
+    return weighted, max_weighted, threshold, passed, weighted / max_weighted
 
 
-def _render_criterion_card(c: dict) -> None:
-    score = c["score"]
-    weight = c["weight"]
-    max_score = c.get("max_score", 5.0)
+def _fmt_when(value: Any, with_time: bool = True) -> str:
+    """'2026-08-06T09:41:12Z' → '2026-08-06 09:41'."""
+    text = str(value or "").replace("T", " ").replace("Z", "").strip()
+    if not text:
+        return "—"
+    return text[:16] if with_time else text[:10]
 
-    head = st.columns([5, 1, 1, 1])
+
+# ---------------------------------------------------------------------------
+# Result rendering — one renderer shared by the live result panel and the
+# history detail dialog, so the two can never drift apart.
+# ---------------------------------------------------------------------------
+
+def _criterion_card(c: dict[str, Any]) -> None:
+    score = float(c.get("score") or 0.0)
+    max_score = float(c.get("max_score") or 5.0) or 5.0
+    weight = float(c.get("weight") or 0.0)
+    frac = min(score / max_score, 1.0) if max_score else 0.0
+    color = theme.score_color(frac)
+
+    meta = [f"Confidence: {(c.get('confidence') or '—').title()}"]
+    band = (c.get("band") or "").strip()
+    if band:
+        meta.append(f"Band: {band.title()}")
+    if c.get("full_document_input"):
+        meta.append("Input: full document")
+    elif c.get("input_coverage") is not None:
+        meta.append(f"Input: excerpts (~{float(c['input_coverage']) * 100:.0f}% of document)")
+
+    head = st.columns([6, 1.5, 1, 1.4], vertical_alignment="center")
     with head[0]:
-        st.markdown(f"**{c['name']}**")
-        band = (c.get("band") or "").strip()
-        coverage = c.get("input_coverage")
-        caption = f"Confidence: {c.get('confidence', '—').title()}"
-        if band:
-            caption += f" · Band: {band.title()}"
-        if c.get("full_document_input"):
-            caption += " · Input: full document"
-        elif coverage is not None:
-            caption += f" · Input: excerpts (~{coverage * 100:.0f}% of document)"
-        st.caption(caption)
+        st.markdown(
+            f'<span class="edf-dense"></span>'
+            f'<div class="edf-crit-name">{_escape(c.get("name") or "—")}</div>'
+            f'<div class="edf-crit-meta">{_escape(" · ".join(meta))}</div>',
+            unsafe_allow_html=True,
+        )
     head[1].markdown(
-        f"<small>Score</small><br>"
-        f"<span style='border:1px solid #000;font-weight:700;"
-        f"padding:.2rem .5rem;'>{score:g} / {max_score:g}</span>",
+        f'<div class="edf-score-badge"><b>{score:g}</b>'
+        f"<span>/ {max_score:g}</span></div>",
         unsafe_allow_html=True,
     )
-    head[2].markdown(f"<small>Weight</small><br><b>×{weight:g}</b>", unsafe_allow_html=True)
-    head[3].markdown(f"<small>Contribution</small><br><b>{score * weight:g}</b>", unsafe_allow_html=True)
-    st.progress(min(score / max_score, 1.0))
-    with st.expander("Details"):
-        cols = st.columns(3)
-        with cols[0]:
-            st.markdown("**Strengths**")
-            for s in c.get("strengths") or ["—"]:
-                st.markdown(f"- {s}")
-        with cols[1]:
-            st.markdown("**Weaknesses**")
-            for s in c.get("weaknesses") or ["No significant weaknesses identified."]:
-                st.markdown(f"- {s}")
-        with cols[2]:
-            st.markdown("**Missing evidence**")
-            for s in c.get("missing_evidence") or ["—"]:
-                st.markdown(f"- {s}")
-        if c.get("input_gaps"):
-            st.markdown("**Input gaps** *(not seen by the model — not penalised)*")
-            for s in c["input_gaps"]:
-                st.markdown(f"- {s}")
-        if c.get("evaluator_comment"):
-            st.markdown("**Evaluator comment**")
-            st.write(c["evaluator_comment"])
-        if c.get("recommendations"):
-            st.markdown("**Recommendations**")
-            for s in c["recommendations"]:
-                st.markdown(f"- {s}")
-
-
-# ---------------------------------------------------------------------------
-# Queue bar (top, full-width, auto-refreshing)
-# ---------------------------------------------------------------------------
-
-def _escape(text: Any) -> str:
-    return (
-        str(text or "")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+    head[2].markdown(
+        f'<div class="edf-tile-inline"><div class="edf-crit-meta">Weight</div>'
+        f'<div class="edf-num">×{weight:g}</div></div>',
+        unsafe_allow_html=True,
     )
+    head[3].markdown(
+        f'<div class="edf-tile-inline"><div class="edf-crit-meta">Contribution</div>'
+        f'<div class="edf-num">{score * weight:g}'
+        f"<small> / {max_score * weight:g}</small></div></div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(theme.meter(frac, color), unsafe_allow_html=True)
 
+    with st.expander("Findings, evidence gaps and recommendations"):
+        cols = st.columns(3)
+        cols[0].markdown(
+            theme.bullet_group("Strengths", c.get("strengths"), "good"),
+            unsafe_allow_html=True,
+        )
+        cols[1].markdown(
+            theme.bullet_group(
+                "Weaknesses", c.get("weaknesses"), "bad",
+                empty="No significant weaknesses identified.",
+            ),
+            unsafe_allow_html=True,
+        )
+        cols[2].markdown(
+            theme.bullet_group("Missing evidence", c.get("missing_evidence")),
+            unsafe_allow_html=True,
+        )
+        if c.get("input_gaps"):
+            st.markdown(
+                theme.bullet_group(
+                    "Input gaps — not seen by the model, not penalised",
+                    c["input_gaps"], "gap",
+                ),
+                unsafe_allow_html=True,
+            )
+        if c.get("evaluator_comment"):
+            st.markdown(
+                '<div class="edf-lgroup"><div class="lg-h"><i></i>Evaluator comment</div>'
+                f"{theme.prose(c['evaluator_comment'])}</div>",
+                unsafe_allow_html=True,
+            )
+        if c.get("recommendations"):
+            st.markdown(
+                theme.bullet_group("Recommendations", c["recommendations"], "gap"),
+                unsafe_allow_html=True,
+            )
+
+
+def _verdict_panel(run: dict[str, Any]) -> None:
+    weighted, max_weighted, threshold, passed, frac = _verdict(run)
+
+    cols = st.columns([1.05, 3], vertical_alignment="center")
+    with cols[0]:
+        # "content", not "stretch" — the donut is square by construction and
+        # stretching it to the column width distorts the ring.
+        st.altair_chart(
+            charts.overall_donut(weighted, max_weighted, passed), width="content"
+        )
+    with cols[1]:
+        if threshold is None:
+            thr_value, thr_sub = "—", "not configured"
+            margin = "no threshold set"
+        else:
+            delta = weighted - threshold
+            thr_value = f"{threshold:g}"
+            thr_sub = f"{threshold / max_weighted * 100:.0f}% of maximum"
+            margin = f"{'+' if delta >= 0 else '−'}{abs(delta):g} against threshold"
+        st.markdown(
+            theme.tiles(
+                theme.tile("Weighted total", f"{weighted:g}"
+                           f"<small> / {max_weighted:g}</small>",
+                           f"{frac * 100:.1f}% of maximum", "navy"),
+                theme.tile("Pass threshold", thr_value, thr_sub, "accent"),
+                theme.tile("Outcome", "PASS" if passed else "FAIL", margin,
+                           "pass" if passed else "fail"),
+                theme.tile("Predicted band", str(run.get("predicted_band") or "—"),
+                           f"Confidence: {(run.get('overall_confidence') or '—').title()}"),
+            ),
+            unsafe_allow_html=True,
+        )
+
+
+def render_run(run: dict[str, Any], key: str, *, exports: bool = True,
+               deletable: bool = False) -> None:
+    """Full read-out for one run: verdict, summary, charts, criterion detail."""
+    if run.get("ingest_warning"):
+        st.warning(run["ingest_warning"], icon="⚠️")
+
+    _verdict_panel(run)
+
+    criteria = run.get("criteria") or []
+
+    st.markdown(
+        theme.section("Assessment summary", "ESR style, generated from the criterion findings"),
+        unsafe_allow_html=True,
+    )
+    st.markdown(theme.prose(run.get("esr_style_summary") or "—"), unsafe_allow_html=True)
+
+    score_chart = charts.criterion_scores(criteria)
+    contrib_chart = charts.contribution_bars(criteria)
+    if score_chart is not None or contrib_chart is not None:
+        st.markdown(
+            theme.section("Score profile", "where the marks were won and lost"),
+            unsafe_allow_html=True,
+        )
+        cc = st.columns(2)
+        if score_chart is not None:
+            with cc[0]:
+                st.caption("Score against maximum, per criterion")
+                st.altair_chart(score_chart, width="stretch")
+        if contrib_chart is not None:
+            with cc[1]:
+                st.caption("Weighted contribution against the weighted cap")
+                st.altair_chart(contrib_chart, width="stretch")
+
+    profile = charts.band_profile(criteria)
+    if profile is not None:
+        st.caption("Consistency across criteria — a flat line is a uniform proposal")
+        st.altair_chart(profile, width="stretch")
+
+    if criteria:
+        st.markdown(
+            theme.section("Criterion detail", f"{len(criteria)} criteria assessed"),
+            unsafe_allow_html=True,
+        )
+        for c in criteria:
+            with st.container(border=True):
+                _criterion_card(c)
+
+    if exports or deletable:
+        st.markdown(theme.section("Export"), unsafe_allow_html=True)
+        cid = run.get("call_id", "edf")
+        cols = st.columns(4)
+        if exports:
+            with cols[0]:
+                st.download_button(
+                    "PDF report", data=_pdf_bytes(run),
+                    file_name=f"evaluation_{cid}.pdf", mime="application/pdf",
+                    width="stretch", key=f"{key}_pdf",
+                )
+            with cols[1]:
+                st.download_button(
+                    "CSV", data=_run_to_csv(run),
+                    file_name=f"evaluation_{cid}.csv", mime="text/csv",
+                    width="stretch", key=f"{key}_csv",
+                )
+            with cols[2]:
+                st.download_button(
+                    "JSON", data=json.dumps(run, indent=2).encode("utf-8"),
+                    file_name=f"evaluation_{cid}.json", mime="application/json",
+                    width="stretch", key=f"{key}_json",
+                )
+        with cols[3]:
+            if deletable and is_admin:
+                if st.button("Delete this run", type="primary", width="stretch",
+                             key=f"{key}_del"):
+                    try:
+                        db.delete_run(str(cid), requested_by=st.session_state.authed_username)
+                        st.rerun()
+                    except db.NotAuthorizedError as exc:
+                        st.error(str(exc))
+            elif deletable:
+                st.caption("Only the admin user can delete runs.")
+
+
+# ---------------------------------------------------------------------------
+# Queue bar (bottom, full-width, auto-refreshing)
+# ---------------------------------------------------------------------------
 
 def _promote_finished_my_jobs() -> bool:
     """Surface results of this session's finished jobs.
@@ -730,7 +492,9 @@ def _promote_finished_my_jobs() -> bool:
                 newest_done_at = ts
                 newest_done_call_id = info.get("result_call_id") or info.get("call_id")
         elif status == "failed":
-            failed_messages.append((info.get("proposal_acronym", "—"), info.get("error") or "Evaluation failed."))
+            failed_messages.append(
+                (info.get("proposal_acronym", "—"), info.get("error") or "Evaluation failed.")
+            )
 
     changed = still_pending != pending
     st.session_state.my_job_ids = still_pending
@@ -748,7 +512,7 @@ def _promote_finished_my_jobs() -> bool:
 
 @st.fragment(run_every="2s")
 def _queue_bar() -> None:
-    """Top, full-width auto-refreshing queue indicator."""
+    """Sticky, full-width auto-refreshing queue indicator."""
     active = jobs.list_active()
     my_ids = set(st.session_state.my_job_ids)
 
@@ -772,7 +536,7 @@ def _queue_bar() -> None:
             '<div class="edf-queue-bar idle">'
             '<span class="dot"></span>'
             '<span class="summary">Queue idle</span>'
-            '<span style="color:#525252">No proposals being processed.</span>'
+            '<span class="msg">No proposals are being processed.</span>'
             "</div>",
             unsafe_allow_html=True,
         )
@@ -793,11 +557,12 @@ def _queue_bar() -> None:
         pct = max(0, min(100, int(round(float(frac) * 100))))
         msg = _escape(running[0].get("progress_msg") or "")
         progress_html = (
+            f'<span class="pct">{pct}%</span>'
             f'<div class="progress" title="{msg}"><div style="width:{pct}%"></div></div>'
         )
 
     # ── Top half of the bar: status + summary + running-job progress ──────
-    running_msg = _escape(running[0]["progress_msg"]) if running else ""
+    running_msg = _escape(running[0].get("progress_msg") or "") if running else ""
     st.markdown(
         '<div class="edf-queue-bar busy">'
         '<span class="dot"></span>'
@@ -827,18 +592,12 @@ def _queue_bar() -> None:
             if j["job_id"] in my_ids:
                 classes.append("mine")
 
-            if is_cancelling:
-                marker = "⏳"
-            elif j["status"] == "running":
-                marker = "▶"
-            else:
-                marker = "•"
-            you = " (you)" if j["job_id"] in my_ids else ""
-
             st.markdown(
-                f'<div class="{" ".join(classes)}" title="{call_id} · submitted by {submitter}">{marker} '
-                f"<b>{acronym}</b>{you} <code>{call_id}</code> "
-                f'<span class="qbar-submitter">by {submitter}</span></div>',
+                f'<div class="{" ".join(classes)}" '
+                f'title="{call_id} · submitted by {submitter}">'
+                f'<span class="lamp"></span><b>{acronym}</b> '
+                f"<code>{call_id}</code>"
+                f'<span class="qbar-submitter">{submitter}</span></div>',
                 unsafe_allow_html=True,
             )
             is_owner = bool(st.session_state.submitted_by.strip()) and (
@@ -848,7 +607,8 @@ def _queue_bar() -> None:
 
             if is_cancelling:
                 st.markdown(
-                    '<span class="qbar-cancel-pending" title="Cancelling — worker will stop at the next checkpoint">…</span>',
+                    '<span class="qbar-cancel-pending" title="Cancelling — the worker '
+                    'will stop at the next checkpoint">…</span>',
                     unsafe_allow_html=True,
                 )
             elif is_owner:
@@ -861,7 +621,8 @@ def _queue_bar() -> None:
                     st.rerun()
             else:
                 st.markdown(
-                    f'<span class="qbar-cancel-locked" title="Only {submitter} can cancel this run">🔒</span>',
+                    f'<span class="qbar-cancel-locked" '
+                    f'title="Only {submitter} can cancel this run">🔒</span>',
                     unsafe_allow_html=True,
                 )
 
@@ -870,19 +631,23 @@ def _queue_bar() -> None:
 # Dialogs
 # ---------------------------------------------------------------------------
 
-@st.dialog("Refresh criteria", width="small")
+@st.dialog("Criteria spreadsheet", width="small")
 def refresh_criteria_dialog() -> None:
+    st.caption(
+        "Download the current criteria, edit names, descriptions, weights and "
+        "maximum scores in Excel, then upload the file back."
+    )
     st.download_button(
-        "Download current criteria as XLSX",
+        "Download current criteria (XLSX)",
         data=criteria_to_xlsx_bytes(_criterion_dicts()),
         file_name="edf_criteria_template.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
+        width="stretch",
     )
     st.divider()
     up = st.file_uploader("Upload edited XLSX", type=["xlsx"], key="dlg_criteria_xlsx")
     if up is not None:
-        if st.button("Apply", type="primary", use_container_width=True):
+        if st.button("Apply to this session", type="primary", width="stretch"):
             try:
                 parsed = xlsx_to_criteria(up.read())
                 st.session_state.criteria = [Criterion(**c) for c in parsed]
@@ -894,13 +659,13 @@ def refresh_criteria_dialog() -> None:
 
 @st.dialog("Wipe history?", width="small")
 def wipe_db_dialog() -> None:
-    st.warning("Permanently deletes every stored run.")
+    st.warning("This permanently deletes every stored run for every user.", icon="⚠️")
     cols = st.columns(2)
     with cols[0]:
-        if st.button("Cancel", use_container_width=True):
+        if st.button("Cancel", width="stretch"):
             st.rerun()
     with cols[1]:
-        if st.button("Wipe everything", type="primary", use_container_width=True):
+        if st.button("Wipe everything", type="primary", width="stretch"):
             try:
                 removed = db.wipe_all(requested_by=st.session_state.authed_username)
                 st.success(f"Removed {removed} run(s).")
@@ -909,103 +674,30 @@ def wipe_db_dialog() -> None:
                 st.error(str(exc))
 
 
-def _render_run_details(run: dict[str, Any]) -> None:
-    if run.get("ingest_warning"):
-        st.warning(run["ingest_warning"], icon="⚠️")
-    st.markdown(f"### {run.get('proposal_acronym', '—')}  ·  `{run.get('call_id')}`")
-    st.caption(
-        f"Generated: {run.get('generated_at', '—')}  ·  "
-        f"Action type: {run.get('action_type', '—')}  ·  "
-        f"Confidence: {run.get('overall_confidence', '—')}"
-    )
-    weighted = run.get("weighted_total", 0.0)
-    max_w = run.get("max_weighted_total", 1.0) or 1.0
-    threshold = run.get("overall_threshold")
-    passed = (threshold is None) or (weighted >= threshold)
-    cols = st.columns(4)
-    cols[0].metric("Weighted total", f"{weighted:g}", f"/ {max_w:g}")
-    cols[1].metric("Threshold", f"{threshold:g}" if threshold is not None else "—")
-    cols[2].metric("Pass / fail", "PASS" if passed else "FAIL")
-    cols[3].metric("Predicted band", run.get("predicted_band", "—"))
-    st.markdown("**ESR-style summary**")
-    st.write(run.get("esr_style_summary", "—"))
-    st.markdown("**Per-criterion**")
-    for c in run.get("criteria", []):
-        with st.expander(f"{c['name']} — {c['score']}/5 · weight ×{c['weight']}"):
-            _render_criterion_card(c)
-    act = st.columns([1, 1, 1, 1])
-    with act[0]:
-        st.download_button("Export CSV", data=_run_to_csv(run),
-                           file_name=f"evaluation_{run.get('call_id', 'edf')}.csv",
-                           mime="text/csv", use_container_width=True)
-    with act[1]:
-        st.download_button("Export JSON", data=json.dumps(run, indent=2).encode(),
-                           file_name=f"evaluation_{run.get('call_id', 'edf')}.json",
-                           mime="application/json", use_container_width=True)
-    with act[2]:
-        st.download_button("Export PDF", data=_run_to_pdf(run),
-                           file_name=f"evaluation_{run.get('call_id', 'edf')}.pdf",
-                           mime="application/pdf", use_container_width=True)
-    with act[3]:
-        if is_admin:
-            if st.button("Delete this run", type="primary", use_container_width=True):
-                try:
-                    db.delete_run(run.get("call_id", ""), requested_by=st.session_state.authed_username)
-                    st.rerun()
-                except db.NotAuthorizedError as exc:
-                    st.error(str(exc))
-        else:
-            st.caption("Only the admin user can delete runs.")
-
-
-@st.fragment(run_every="3s")
-def history_tab() -> None:
-    all_runs = db.list_runs()
-    if not all_runs:
-        st.info("No runs saved yet.")
-        return
-    query = st.text_input("Search", placeholder="Filter by Call ID, acronym, or band…").strip()
-    runs = all_runs if not query else [
-        r for r in all_runs
-        if query.lower() in (r.get("call_id") or "").lower()
-        or query.lower() in (r.get("proposal_acronym") or "").lower()
-        or query.lower() in (r.get("predicted_band") or "").lower()
-        or query.lower() in (r.get("action_type") or "").lower()
-    ]
-    st.caption(f"Showing {len(runs)} of {len(all_runs)} run(s).")
-    if not runs:
-        st.info(f"No matches for '{query}'.")
-        return
-    header = st.columns([2, 3, 1.5, 2, 1.2, 0.9])
-    for col, label in zip(header, ["Acronym", "Call ID", "Date", "Band", "Score", ""]):
-        col.markdown(f"**{label}**")
-    st.divider()
-    for r in runs:
-        cols = st.columns([2, 3, 1.5, 2, 1.2, 0.9])
-        cols[0].markdown(f"**{r.get('proposal_acronym') or '—'}**")
-        cols[1].markdown(f"`{r.get('call_id')}`")
-        cols[2].markdown((r.get("generated_at") or "")[:10] or "—")
-        cols[3].markdown(r.get("predicted_band") or "—")
-        cols[4].markdown(f"{r['weighted_total']:g}/{r['max_weighted_total']:g}")
-        with cols[5]:
-            if st.button("View", key=f"hist_view_{r['call_id']}", use_container_width=True):
-                st.session_state.pending_dialog = "detail"
-                st.session_state.detail_call_id = r["call_id"]
-                st.rerun()
-
-
-@st.dialog("Run details", width="large")
+@st.dialog("Evaluation detail", width="large")
 def run_detail_dialog(call_id: str) -> None:
     run = db.get_run(call_id)
     if run is None:
-        st.error("Run no longer exists.")
-        if st.button("Back to history", use_container_width=True):
+        st.error("This run no longer exists.")
+        if st.button("Back to history", width="stretch"):
             st.rerun()
         return
-    if st.button("Back to history", use_container_width=True):
-        st.rerun()
+
+    top = st.columns([5, 1], vertical_alignment="center")
+    with top[0]:
+        st.markdown(
+            f'<div class="edf-apptitle">{_escape(run.get("proposal_acronym") or "—")}</div>'
+            f'<div class="edf-appsub"><b>{_escape(run.get("call_id") or "—")}</b> · '
+            f'{_escape(run.get("action_type") or "—")} · '
+            f'evaluated {_escape(_fmt_when(run.get("generated_at")))}</div>',
+            unsafe_allow_html=True,
+        )
+    with top[1]:
+        st.markdown('<span class="edf-ghost-marker"></span>', unsafe_allow_html=True)
+        if st.button("Close", width="stretch", key="detail_close"):
+            st.rerun()
     st.divider()
-    _render_run_details(run)
+    render_run(run, key=f"detail_{call_id}", exports=True, deletable=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1017,15 +709,43 @@ st.session_state.pending_dialog = None
 if _pending == "detail" and st.session_state.detail_call_id:
     run_detail_dialog(st.session_state.detail_call_id)
 
+
 # ---------------------------------------------------------------------------
-# Header
+# Header bar — logo, product name, active models, signed-in user.
+# Relocated here from the sidebar so the sidebar is purely configuration.
 # ---------------------------------------------------------------------------
 
-st.title("EDF Proposal Evaluator")
-st.caption(
-    f"LLM Model =`{st.session_state.selected_chat_model}` · "
-    f"Embeddings Model=`{st.session_state.selected_embed_model}`"
-)
+_hdr = st.columns([0.50, 0.40, 0.10], vertical_alignment="center")
+with _hdr[0]:
+    st.markdown(
+        theme.appbar(
+            "EDF Proposal Evaluator",
+            "Internal pre-screening of European Defence Fund Part B proposals · "
+            "<b>not an official evaluation</b>",
+        ),
+        unsafe_allow_html=True,
+    )
+with _hdr[1]:
+    st.markdown(
+        '<div class="edf-appmeta">'
+        + theme.chip(st.session_state.selected_chat_model, key="LLM", max_len=22)
+        + theme.chip(st.session_state.selected_embed_model, key="EMBED", max_len=18)
+        + theme.chip(st.session_state.authed_username,
+                     variant="solid" if is_admin else "accent",
+                     key="ADMIN" if is_admin else "USER", max_len=16)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+with _hdr[2]:
+    st.markdown('<span class="edf-logout-slot"></span>', unsafe_allow_html=True)
+    if st.button("Sign out", width="stretch", key="logout_btn"):
+        auth.revoke_session(st.session_state.get("authed_sid"))
+        st.session_state.authed_username = None
+        st.session_state.authed_sid = None
+        st.session_state.submitted_by = ""
+        st.query_params.clear()
+        st.rerun()
+
 
 # ---------------------------------------------------------------------------
 # Sidebar — always editable. Edits apply to the *next* submission; jobs
@@ -1033,17 +753,91 @@ st.caption(
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
-    st.image(str(Path(__file__).parent / "ikh_logo.png"), width=220)
+    st.markdown(theme.section("Call configuration", step=1), unsafe_allow_html=True)
+    st.session_state.call_id = st.text_input(
+        "Call ID *", value=st.session_state.call_id,
+        placeholder="e.g. EDF-2024-LS-RA-CHALLENGE",
+    )
+    st.session_state.proposal_acronym = st.text_input(
+        "Proposal acronym *", value=st.session_state.proposal_acronym,
+        placeholder="e.g. SWARMER",
+    )
+    new_action = st.selectbox(
+        "Action type", ["Research", "Development"],
+        index=0 if st.session_state.action_type == "Research" else 1,
+    )
+    if new_action != st.session_state.action_type:
+        st.session_state.action_type = new_action
+        defaults = (
+            DEFAULT_RESEARCH_CRITERIA if new_action == "Research"
+            else DEFAULT_DEVELOPMENT_CRITERIA
+        )
+        st.session_state.criteria = [Criterion(**c) for c in defaults]
+    st.session_state.call_context = st.text_area(
+        "Call topic context (optional)",
+        value=st.session_state.call_context,
+        height=110,
+        placeholder="Paste the call topic description here…",
+        help=(
+            "Taken from the call fiche / topic description of the specific "
+            "call. Supplied per run — never baked into the tool."
+        ),
+    )
 
-    _acct_cols = st.columns([3, 1])
-    _acct_cols[0].caption(f"**{st.session_state.authed_username}**")
-    if _acct_cols[1].button("Log out", use_container_width=True):
-        auth.revoke_session(st.session_state.get("authed_sid"))
-        st.session_state.authed_username = None
-        st.session_state.authed_sid = None
-        st.session_state.submitted_by = ""
-        st.query_params.clear()
-        st.rerun()
+    st.markdown(
+        theme.section("Criteria & weights", f"{len(st.session_state.criteria)} active", step=2),
+        unsafe_allow_html=True,
+    )
+    to_delete: list[int] = []
+    for idx, crit in enumerate(st.session_state.criteria):
+        with st.expander(f"{idx + 1}.  {crit.name}", expanded=False):
+            crit.name = st.text_input("Name", value=crit.name, key=f"name_{idx}")
+            crit.description = st.text_area("Description", value=crit.description,
+                                            key=f"desc_{idx}", height=80)
+            c1, c2 = st.columns(2)
+            with c1:
+                crit.weight = st.number_input("Weight", min_value=0.0, max_value=10.0,
+                                              value=float(crit.weight), step=0.5,
+                                              key=f"w_{idx}")
+            with c2:
+                crit.max_score = st.number_input("Max score", min_value=1.0, max_value=10.0,
+                                                 value=float(crit.max_score), step=0.5,
+                                                 key=f"ms_{idx}")
+            if st.button("Remove criterion", key=f"del_{idx}", width="stretch"):
+                to_delete.append(idx)
+    for idx in reversed(to_delete):
+        st.session_state.criteria.pop(idx)
+
+    if st.button("+  Add criterion", width="stretch"):
+        st.session_state.criteria.append(
+            Criterion(name=f"Criterion {len(st.session_state.criteria) + 1}",
+                      description="", weight=1.0, max_score=5.0)
+        )
+    a, b = st.columns(2)
+    with a:
+        if st.button("Spreadsheet", width="stretch",
+                     help="Import / export criteria as XLSX"):
+            refresh_criteria_dialog()
+    with b:
+        if st.button("Reset", width="stretch", help="Restore the default criteria set"):
+            defaults = (
+                DEFAULT_RESEARCH_CRITERIA if st.session_state.action_type == "Research"
+                else DEFAULT_DEVELOPMENT_CRITERIA
+            )
+            st.session_state.criteria = [Criterion(**c) for c in defaults]
+            st.rerun()
+
+    st.markdown(theme.section("Pass threshold", step=3), unsafe_allow_html=True)
+    overall_threshold = st.number_input(
+        "Overall weighted minimum", min_value=0.0, max_value=200.0,
+        value=OVERALL_THRESHOLD_DEFAULT, step=0.5,
+        label_visibility="collapsed",
+    )
+    _max_total = sum(c.weight * c.max_score for c in st.session_state.criteria)
+    st.caption(
+        f"{overall_threshold:g} of a possible {_max_total:g}"
+        + (f" · {overall_threshold / _max_total * 100:.0f}% of maximum" if _max_total else "")
+    )
 
     st.divider()
     _chat_options, _embed_options = _list_models()
@@ -1066,95 +860,19 @@ with st.sidebar:
             disabled=True,
         )
 
-    st.header("Call configuration")
-    st.session_state.call_id = st.text_input(
-        "Call ID *", value=st.session_state.call_id,
-        placeholder="e.g. EDF-2024-LS-RA-CHALLENGE",
-    )
-    st.session_state.proposal_acronym = st.text_input(
-        "Proposal acronym *", value=st.session_state.proposal_acronym,
-        placeholder="e.g. SWARMER",
-    )
-    st.session_state.call_context = st.text_area(
-        "Call topic context (optional)",
-        value=st.session_state.call_context,
-        height=120,
-        placeholder=(
-            "Paste the call topic description, functional requirements and "
-            "expected impact here. The evaluator judges technical fit against "
-            "this text — without it, only the proposal itself is assessed."
-        ),
-        help=(
-            "Taken from the call fiche / topic description of the specific "
-            "call. Supplied per run — never baked into the tool."
-        ),
-    )
-    new_action = st.selectbox(
-        "Action type", ["Research", "Development"],
-        index=0 if st.session_state.action_type == "Research" else 1,
-    )
-    if new_action != st.session_state.action_type:
-        st.session_state.action_type = new_action
-        defaults = DEFAULT_RESEARCH_CRITERIA if new_action == "Research" else DEFAULT_DEVELOPMENT_CRITERIA
-        st.session_state.criteria = [Criterion(**c) for c in defaults]
-
-    st.divider()
-    st.subheader("Criteria & weights")
-    to_delete: list[int] = []
-    for idx, crit in enumerate(st.session_state.criteria):
-        with st.expander(f"{idx + 1}. {crit.name}", expanded=False):
-            crit.name = st.text_input("Name", value=crit.name, key=f"name_{idx}")
-            crit.description = st.text_area("Description", value=crit.description,
-                                             key=f"desc_{idx}", height=80)
-            c1, c2 = st.columns(2)
-            with c1:
-                crit.weight = st.number_input("Weight", min_value=0.0, max_value=10.0,
-                                               value=float(crit.weight), step=0.5,
-                                               key=f"w_{idx}")
-            with c2:
-                crit.max_score = st.number_input("Max score", min_value=1.0, max_value=10.0,
-                                                  value=float(crit.max_score), step=0.5,
-                                                  key=f"ms_{idx}")
-            if st.button("Remove", key=f"del_{idx}"):
-                to_delete.append(idx)
-    for idx in reversed(to_delete):
-        st.session_state.criteria.pop(idx)
-
-    if st.button("+ Add criterion", use_container_width=True):
-        st.session_state.criteria.append(
-            Criterion(name=f"Criterion {len(st.session_state.criteria) + 1}",
-                      description="", weight=1.0, max_score=5.0)
+    if st.session_state.my_job_ids:
+        n_mine = len(st.session_state.my_job_ids)
+        st.info(
+            f"{n_mine} submission{'s' if n_mine != 1 else ''} of yours "
+            "still in flight. Results appear automatically as each finishes.",
+            icon="⏳",
         )
-    a, b = st.columns(2)
-    with a:
-        if st.button("Refresh criteria", use_container_width=True):
-            refresh_criteria_dialog()
-    with b:
-        if st.button("Reset defaults", use_container_width=True):
-            defaults = DEFAULT_RESEARCH_CRITERIA if st.session_state.action_type == "Research" else DEFAULT_DEVELOPMENT_CRITERIA
-            st.session_state.criteria = [Criterion(**c) for c in defaults]
-            st.rerun()
-
-    st.divider()
-    overall_threshold = st.number_input(
-        "Overall pass threshold", min_value=0.0, max_value=200.0,
-        value=OVERALL_THRESHOLD_DEFAULT, step=0.5,
-    )
 
     if is_admin:
         st.divider()
-        runs_count = len(db.list_runs())
-        if runs_count:
-            if st.button("Wipe history", type="primary", use_container_width=True):
+        if len(db.list_runs()):
+            if st.button("Wipe history", type="primary", width="stretch"):
                 wipe_db_dialog()
-
-    if st.session_state.my_job_ids:
-        st.divider()
-        n_mine = len(st.session_state.my_job_ids)
-        st.info(
-            f"You have {n_mine} submission{'s' if n_mine != 1 else ''} in flight. "
-            "Results will appear here automatically when each one finishes."
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -1168,69 +886,234 @@ def _render_result_panel() -> None:
     result = st.session_state.result
     if not result:
         return
+
     st.divider()
-    if result.get("ingest_warning"):
-        st.warning(result["ingest_warning"], icon="⚠️")
-    head_cols = st.columns([10, 1])
-    head_cols[0].header("Evaluation result")
-    with head_cols[1]:
-        st.write("")
-        if st.button("✕", key="dismiss_result", help="Dismiss — the run stays in History"):
+    head = st.columns([6, 1], vertical_alignment="center")
+    with head[0]:
+        st.markdown(
+            theme.section(
+                "Evaluation result",
+                f"{result.get('proposal_acronym') or '—'} · "
+                f"{result.get('call_id') or '—'} · "
+                f"{_fmt_when(result.get('generated_at'))}",
+            ),
+            unsafe_allow_html=True,
+        )
+    with head[1]:
+        st.markdown('<span class="edf-ghost-marker"></span>', unsafe_allow_html=True)
+        if st.button("Dismiss", key="dismiss_result", width="stretch",
+                     help="Hide this panel — the run stays in History"):
             st.session_state.result = None
             st.rerun()
 
-    weighted = result.get("weighted_total", 0.0)
-    max_weighted = result.get("max_weighted_total", 1.0) or 1.0
-    threshold = result.get("overall_threshold")
-    passed = (threshold is None) or (weighted >= threshold)
-    band = result.get("predicted_band", "—")
-    score_pct = (weighted / max_weighted) * 100 if max_weighted else 0.0
+    render_run(result, key="live", exports=True, deletable=False)
 
-    with st.container(border=True):
-        cols = st.columns(4)
-        cols[0].metric("Weighted total", f"{weighted:g}", f"/ {max_weighted:g}")
-        cols[1].metric("Threshold", f"{threshold:g}" if threshold is not None else "—")
-        cols[2].metric("Pass / Fail", "PASS" if passed else "FAIL",
-                       delta=f"{'+' if passed else '−'}{abs(weighted - (threshold or 0)):g}",
-                       delta_color="normal" if passed else "inverse")
-        cols[3].metric("Predicted band", band)
-        st.progress(min(weighted / max_weighted, 1.0), text=f"{score_pct:.1f}% of max")
-        st.caption(
-            f"{result.get('proposal_acronym', '—')} · `{result.get('call_id', '—')}` · "
-            f"{result.get('action_type', '—')} · Confidence: {result.get('overall_confidence', '—')}"
-        )
 
-    with st.container(border=True):
-        st.markdown("##### ESR-style summary")
-        st.write(result.get("esr_style_summary", "—"))
+# ---------------------------------------------------------------------------
+# History + insights data
+# ---------------------------------------------------------------------------
 
-    st.markdown("##### Per-criterion breakdown")
-    for c in result.get("criteria", []):
-        with st.container(border=True):
-            _render_criterion_card(c)
+@st.cache_data(ttl=30, show_spinner=False)
+def _criterion_stats(call_ids: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Mean share-of-max per criterion name across the given runs.
 
-    foot = st.columns([1, 1, 1])
-    with foot[0]:
-        st.download_button(
-            "Download JSON",
-            data=json.dumps(result, indent=2).encode("utf-8"),
-            file_name=f"evaluation_{result.get('call_id', 'edf')}.json",
-            mime="application/json", use_container_width=True,
+    Cached on the tuple of call IDs: the full result JSON has to be loaded
+    per run to reach the criterion breakdown, which is too heavy to redo on
+    every 3-second fragment refresh.
+    """
+    totals: dict[str, list[float]] = {}
+    for cid in call_ids:
+        run = db.get_run(cid)
+        if not run:
+            continue
+        for c in run.get("criteria") or []:
+            name = str(c.get("name") or "").strip()
+            max_score = float(c.get("max_score") or 5.0) or 5.0
+            if not name:
+                continue
+            totals.setdefault(name, []).append(
+                max(0.0, min(1.0, float(c.get("score") or 0.0) / max_score))
+            )
+    stats = [
+        {"name": name, "mean": sum(vals) / len(vals), "n": len(vals)}
+        for name, vals in totals.items() if vals
+    ]
+    stats.sort(key=lambda s: s["mean"])
+    return stats
+
+
+def _portfolio_tiles(runs: list[dict[str, Any]]) -> str:
+    total = len(runs)
+    fracs, passes = [], 0
+    for r in runs:
+        max_w = float(r.get("max_weighted_total") or 0.0)
+        if max_w:
+            fracs.append(float(r.get("weighted_total") or 0.0) / max_w)
+        thr = r.get("overall_threshold")
+        if thr is None or float(r.get("weighted_total") or 0.0) >= float(thr):
+            passes += 1
+    mean = (sum(fracs) / len(fracs) * 100) if fracs else 0.0
+    best = (max(fracs) * 100) if fracs else 0.0
+    latest = _fmt_when(runs[0].get("generated_at")) if runs else "—"
+    return theme.tiles(
+        theme.tile("Runs stored", f"{total}", f"latest {latest}", "navy"),
+        theme.tile("Above threshold", f"{passes}<small> / {total}</small>",
+                   f"{(passes / total * 100) if total else 0:.0f}% pass rate", "accent"),
+        theme.tile("Mean score", f"{mean:.0f}<small>%</small>", "share of maximum"),
+        theme.tile("Best score", f"{best:.0f}<small>%</small>", "share of maximum"),
+    )
+
+
+@st.fragment(run_every="3s")
+def history_tab() -> None:
+    all_runs = db.list_runs()
+    if not all_runs:
+        st.markdown(
+            theme.empty_state(
+                "No evaluations stored yet",
+                "Queue a proposal on the Evaluate tab — completed runs from full "
+                "document uploads are saved here automatically.",
+            ),
+            unsafe_allow_html=True,
         )
-    with foot[1]:
-        st.download_button(
-            "Download CSV",
-            data=_run_to_csv(result),
-            file_name=f"evaluation_{result.get('call_id', 'edf')}.csv",
-            mime="text/csv", use_container_width=True,
+        return
+
+    st.markdown(theme.section("Portfolio"), unsafe_allow_html=True)
+    st.markdown(_portfolio_tiles(all_runs), unsafe_allow_html=True)
+
+    st.markdown(theme.section("Stored evaluations"), unsafe_allow_html=True)
+    filt = st.columns([3, 1.4], vertical_alignment="bottom")
+    with filt[0]:
+        query = st.text_input(
+            "Search", placeholder="Filter by acronym, Call ID, band or action type…",
+            label_visibility="collapsed",
+        ).strip()
+    with filt[1]:
+        bands = ["All outcomes"] + sorted(
+            {str(r.get("predicted_band") or "—") for r in all_runs}
         )
-    with foot[2]:
-        st.download_button(
-            "Download PDF",
-            data=_run_to_pdf(result),
-            file_name=f"evaluation_{result.get('call_id', 'edf')}.pdf",
-            mime="application/pdf", use_container_width=True,
+        band_pick = st.selectbox("Band", bands, label_visibility="collapsed")
+
+    runs = all_runs
+    if query:
+        q = query.lower()
+        runs = [
+            r for r in runs
+            if q in (r.get("call_id") or "").lower()
+            or q in (r.get("proposal_acronym") or "").lower()
+            or q in (r.get("predicted_band") or "").lower()
+            or q in (r.get("action_type") or "").lower()
+        ]
+    if band_pick != "All outcomes":
+        runs = [r for r in runs if str(r.get("predicted_band") or "—") == band_pick]
+
+    st.caption(f"Showing {len(runs)} of {len(all_runs)} run(s).")
+    if not runs:
+        st.markdown(
+            theme.empty_state("No matches", "Try a shorter search term or clear the band filter."),
+            unsafe_allow_html=True,
         )
+        return
+
+    widths = [2.4, 1.5, 2.2, 1.9, 0.9]
+    head = st.columns(widths)
+    for col, label in zip(
+        head, ["Proposal", "Evaluated", "Predicted band", "Weighted score", ""]
+    ):
+        col.markdown(f'<div class="edf-hhead">{label}</div>', unsafe_allow_html=True)
+
+    for r in runs:
+        weighted, max_w, threshold, passed, frac = _verdict(r)
+        band = str(r.get("predicted_band") or "—")
+        cols = st.columns(widths, vertical_alignment="center")
+        with cols[0]:
+            st.markdown(
+                '<span class="edf-hrow-marker"></span>'
+                f'<div class="edf-acr">{_escape(r.get("proposal_acronym") or "—")}</div>'
+                f'<span class="edf-cid">{_escape(r.get("call_id") or "—")}</span>',
+                unsafe_allow_html=True,
+            )
+        with cols[1]:
+            st.markdown(
+                f'<div class="edf-date">{_escape(_fmt_when(r.get("generated_at"), False))}</div>'
+                f'<div class="edf-crit-meta">{_escape(r.get("action_type") or "—")}</div>',
+                unsafe_allow_html=True,
+            )
+        with cols[2]:
+            st.markdown(
+                theme.chip(
+                    band, dot=True,
+                    variant={"Likely funded": "pass",
+                             "Likely rejected": "fail"}.get(band, "accent"),
+                ),
+                unsafe_allow_html=True,
+            )
+        with cols[3]:
+            st.markdown(
+                f'<div class="edf-num">{weighted:g}<small> / {max_w:g}</small>'
+                f'&nbsp;&nbsp;<small>{frac * 100:.0f}%</small></div>'
+                + theme.meter(frac, theme.score_color(frac)),
+                unsafe_allow_html=True,
+            )
+        with cols[4]:
+            if st.button("Open", key=f"hist_view_{r['call_id']}", width="stretch"):
+                st.session_state.pending_dialog = "detail"
+                st.session_state.detail_call_id = r["call_id"]
+                st.rerun()
+
+
+def insights_tab() -> None:
+    all_runs = db.list_runs()
+    if len(all_runs) < 1:
+        st.markdown(
+            theme.empty_state(
+                "Nothing to analyse yet",
+                "Insights appear once evaluations have been stored in History.",
+            ),
+            unsafe_allow_html=True,
+        )
+        return
+
+    st.markdown(theme.section("Portfolio at a glance"), unsafe_allow_html=True)
+    st.markdown(_portfolio_tiles(all_runs), unsafe_allow_html=True)
+
+    trend = charts.history_trend(all_runs)
+    mix = charts.band_mix(all_runs)
+    if trend is not None or mix is not None:
+        st.markdown(
+            theme.section("Outcomes over time", "oldest to newest"), unsafe_allow_html=True
+        )
+        cols = st.columns([1.6, 1])
+        if trend is not None:
+            with cols[0]:
+                st.caption("Weighted score as a share of the maximum")
+                st.altair_chart(trend, width="stretch")
+        else:
+            cols[0].caption("At least two stored runs are needed for a trend line.")
+        if mix is not None:
+            with cols[1]:
+                st.caption("Predicted outcome band")
+                st.altair_chart(mix, width="stretch")
+
+    stats = _criterion_stats(tuple(r["call_id"] for r in all_runs))
+    spread = charts.score_spread(all_runs)
+    avg = charts.criterion_averages(stats)
+    if avg is not None or spread is not None:
+        st.markdown(
+            theme.section("Where proposals lose marks", "weakest criteria first"),
+            unsafe_allow_html=True,
+        )
+        cols = st.columns([1.6, 1])
+        if avg is not None:
+            with cols[0]:
+                st.caption("Mean score as a share of maximum, per criterion")
+                st.altair_chart(avg, width="stretch")
+        if spread is not None:
+            with cols[1]:
+                st.caption("Distribution of overall scores")
+                st.altair_chart(spread, width="stretch")
+        elif avg is not None:
+            cols[1].caption("At least four stored runs are needed for a distribution.")
 
 
 # ---------------------------------------------------------------------------
@@ -1239,80 +1122,103 @@ def _render_result_panel() -> None:
 # proposal, all while one is being processed.
 # ---------------------------------------------------------------------------
 
-tab_evaluate, tab_history = st.tabs(["Evaluate", "History"])
+tab_evaluate, tab_history, tab_insights = st.tabs(["Evaluate", "History", "Insights"])
 
 with tab_evaluate:
-    st.subheader("1. Upload Part B")
+    left, right = st.columns([1.65, 1], gap="large")
 
-    pasted = st.text_area(
-        "Paste sections directly (not saved to history)",
-        placeholder="Paste a section of Part B here…",
-        height=120,
-        key=f"pasted_{st.session_state.upload_nonce}",
-    )
-
-    uploaded = st.file_uploader(
-        "Or upload the full proposal (DOCX recommended; PDF / TXT accepted)",
-        type=["docx", "pdf", "txt", "md"],
-        accept_multiple_files=False,
-        key=f"uploaded_{st.session_state.upload_nonce}",
-    )
-
-    # ── Stash uploaded bytes; the worker handles extraction/chunking/embedding ─
-    has_content = False
-
-    if uploaded and not pasted.strip():
-        new_key = f"{uploaded.name}:{uploaded.size}"
-        if st.session_state.embedded_key != new_key:
-            st.session_state.embedded_key = new_key
-            st.session_state.proposal_bytes = uploaded.getvalue()
-            st.session_state.proposal_suffix = (
-                ("." + uploaded.name.rsplit(".", 1)[-1]).lower() if "." in uploaded.name else ""
+    with left:
+        st.markdown(
+            theme.section("Proposal input", "DOCX recommended · PDF, TXT, MD accepted", step=1),
+            unsafe_allow_html=True,
+        )
+        uploaded = st.file_uploader(
+            "Upload the full Part B",
+            type=["docx", "pdf", "txt", "md"],
+            accept_multiple_files=False,
+            key=f"uploaded_{st.session_state.upload_nonce}",
+            label_visibility="collapsed",
+        )
+        with st.expander("…or paste sections directly (not saved to history)"):
+            pasted = st.text_area(
+                "Pasted text",
+                placeholder="Paste a section of Part B here…",
+                height=160,
+                key=f"pasted_{st.session_state.upload_nonce}",
+                label_visibility="collapsed",
             )
-        if st.session_state.proposal_bytes:
-            size_kb = len(st.session_state.proposal_bytes) / 1024
+
+        # ── Stash uploaded bytes; the worker handles extraction/embedding ──
+        has_content = False
+
+        if uploaded and not pasted.strip():
+            new_key = f"{uploaded.name}:{uploaded.size}"
+            if st.session_state.embedded_key != new_key:
+                st.session_state.embedded_key = new_key
+                st.session_state.proposal_bytes = uploaded.getvalue()
+                st.session_state.proposal_suffix = (
+                    ("." + uploaded.name.rsplit(".", 1)[-1]).lower()
+                    if "." in uploaded.name else ""
+                )
+            if st.session_state.proposal_bytes:
+                size_kb = len(st.session_state.proposal_bytes) / 1024
+                st.info(
+                    f"**{uploaded.name}** · {size_kb:.1f} KB ready to queue. Text "
+                    "extraction and embedding run on the worker after you queue it.",
+                    icon="📎",
+                )
+                has_content = True
+        elif pasted.strip():
             st.info(
-                f"📎 Ready to queue: **{uploaded.name}** "
-                f"({size_kb:.1f} KB). Text extraction and embedding will run on the worker after you press *Queue evaluation*.",
-                icon="📎",
+                f"{len(pasted.split()):,} words of pasted text — this run will "
+                "**not** be saved to history.",
+                icon="📝",
             )
             has_content = True
 
-    elif pasted.strip():
-        has_content = True
-
-    # ── Config summary + Run button ────────────────────────────────────────────
-    st.subheader("2. Configuration")
-    total_weight = sum(c.weight for c in st.session_state.criteria)
-    max_total = sum(c.weight * c.max_score for c in st.session_state.criteria)
-    threshold_ratio = overall_threshold / max_total if max_total else 0.0
-
-    with st.container(border=True):
-        cols = st.columns([2, 1, 1, 1, 1])
-        cols[0].markdown(
-            f"<small>Proposal · Call</small><br>"
-            f"<b>{st.session_state.proposal_acronym or '—'}</b>  `{st.session_state.call_id or '—'}`",
+    with right:
+        st.markdown(theme.section("Run summary", step=2), unsafe_allow_html=True)
+        total_criteria = len(st.session_state.criteria)
+        max_total = sum(c.weight * c.max_score for c in st.session_state.criteria)
+        threshold_ratio = overall_threshold / max_total if max_total else 0.0
+        st.markdown(
+            theme.tiles(
+                theme.tile("Proposal", _escape(st.session_state.proposal_acronym or "—"),
+                           _escape(st.session_state.call_id or "no Call ID set"),
+                           "accent" if st.session_state.proposal_acronym else ""),
+                theme.tile("Action type", _escape(st.session_state.action_type),
+                           f"{total_criteria} criteria", "navy"),
+                theme.tile("Maximum score", f"{max_total:g}",
+                           f"{sum(c.weight for c in st.session_state.criteria):g} total weight"),
+                theme.tile("Threshold", f"{overall_threshold:g}",
+                           f"{threshold_ratio * 100:.0f}% of maximum"),
+            ),
             unsafe_allow_html=True,
         )
-        cols[1].markdown(f"<small>Action</small><br><b>{st.session_state.action_type}</b>", unsafe_allow_html=True)
-        cols[2].markdown(f"<small>Criteria</small><br><b>{len(st.session_state.criteria)}</b>", unsafe_allow_html=True)
-        cols[3].markdown(f"<small>Max score</small><br><b>{max_total:g}</b>", unsafe_allow_html=True)
-        cols[4].markdown(
-            f"<small>Threshold</small><br><b>{overall_threshold:g}</b> · {threshold_ratio * 100:.0f}%",
-            unsafe_allow_html=True,
-        )
+        if st.session_state.call_context.strip():
+            st.caption(
+                f"Call topic context supplied ({len(st.session_state.call_context.split()):,} words) — "
+                "technical fit will be judged against it."
+            )
+        else:
+            st.caption(
+                "No call topic context supplied — only the proposal itself will be "
+                "assessed. Add it in the sidebar for a fit judgement."
+            )
 
-    run_cols = st.columns([3, 2, 3])
-    with run_cols[1]:
-        st.markdown('<span class="edf-cta-marker"></span>', unsafe_allow_html=True)
-        run_clicked = st.button(
-            "Queue evaluation",
-            type="secondary",
-            disabled=not has_content,
-            use_container_width=True,
-            key="run_eval_btn",
-        )
-
+        st.write("")
+        cta = st.columns([1])
+        with cta[0]:
+            st.markdown('<span class="edf-cta-marker"></span>', unsafe_allow_html=True)
+            run_clicked = st.button(
+                "Queue evaluation",
+                type="secondary",
+                disabled=not has_content,
+                width="stretch",
+                key="run_eval_btn",
+            )
+        if not has_content:
+            st.caption("Upload a document or paste text to enable queueing.")
 
     def _validate() -> list[str]:
         errors: list[str] = []
@@ -1326,15 +1232,16 @@ with tab_evaluate:
             errors.append("At least one criterion is required.")
         return errors
 
-
     if run_clicked:
         errors = _validate()
         if errors:
             for e in errors:
-                st.error(e)
+                st.error(e, icon="⚠️")
         else:
             is_full_proposal = uploaded is not None and not pasted.strip()
-            proposal_bytes_for_job = st.session_state.proposal_bytes if is_full_proposal else None
+            proposal_bytes_for_job = (
+                st.session_state.proposal_bytes if is_full_proposal else None
+            )
             suffix_for_job = st.session_state.proposal_suffix if is_full_proposal else None
             pasted_for_job = pasted.strip() if pasted.strip() else None
 
@@ -1357,7 +1264,8 @@ with tab_evaluate:
                 st.session_state.my_job_ids = list(st.session_state.my_job_ids) + [job_id]
                 st.toast(
                     f"Queued '{st.session_state.proposal_acronym.strip()}' "
-                    f"({'pasted text — not saved to history' if not is_full_proposal else 'saved to history when done'})",
+                    + ("(pasted text — not saved to history)" if not is_full_proposal
+                       else "(saved to history when done)"),
                     icon="📥",
                 )
                 # Reset the proposal-scoped fields for the next submission; Call ID,
@@ -1376,9 +1284,13 @@ with tab_evaluate:
 with tab_history:
     history_tab()
 
+with tab_insights:
+    insights_tab()
+
+
 # ---------------------------------------------------------------------------
 # Queue status — bottom of page, auto-refreshing.
 # ---------------------------------------------------------------------------
 
-st.divider()
+st.markdown("<div style='height:.6rem'></div>", unsafe_allow_html=True)
 _queue_bar()

@@ -5,7 +5,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY .streamlit/ ./.streamlit/
 COPY backend/ ./backend/
+# The login page shares the frontend's design system (and its logo) so both
+# apps look like one product. Only those two files are needed here.
+COPY frontend/theme.py frontend/ikh_logo.png ./frontend/
 COPY auth/ ./auth/
 
 EXPOSE 8502
