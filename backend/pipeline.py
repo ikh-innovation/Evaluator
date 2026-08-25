@@ -368,6 +368,10 @@ def evaluate_proposal(
             criterion_description=crit.get("description", ""),
             weight=float(crit["weight"]),
             action_type=action_type,
+            # The model always scores 0–5; a criterion configured with another
+            # maximum is rescaled inside evaluate_criterion so that score can
+            # never exceed the max_score this run aggregates against.
+            max_score=float(crit.get("max_score", 5.0)),
             chat_model=chat_model,
             call_context=call_context,
             full_document=excerpts[i]["full_document"],
@@ -447,6 +451,17 @@ def evaluate_proposal(
             "Calibration warning: no weaknesses were identified on ANY "
             "criterion. Official ESRs practically never do this, even for "
             "funded proposals — treat these scores as inflated."
+        )
+    # Band/score drift: the model reported a band and a score that did not
+    # agree, and the score was pulled to what the band admits. Silent
+    # correction would hide a model that is not following the rubric.
+    drifted = [r["name"] for r in results if r.get("score_adjusted")]
+    if drifted:
+        warnings.append(
+            "Band/score reconciliation: the model reported a band and a score "
+            f"that disagreed on {len(drifted)} criterion/criteria "
+            f"({', '.join(drifted)}). The score was moved to the value its "
+            "band admits — review those criteria before quoting the total."
         )
     ingest_warning = " ".join(warnings)
 
