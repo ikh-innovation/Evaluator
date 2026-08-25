@@ -25,6 +25,7 @@ from backend.default_criteria import (  # noqa: E402
     DEFAULT_DEVELOPMENT_CRITERIA,
     DEFAULT_RESEARCH_CRITERIA,
 )
+from backend.relevance import REJECTION_TAG  # noqa: E402
 
 import charts  # noqa: E402
 import theme  # noqa: E402
@@ -119,6 +120,8 @@ _DEFAULTS: dict[str, Any] = {
     "session_id": None,
     "my_job_ids": [],          # list[str] — jobs submitted from this session and not yet surfaced
     "known_active_ids": None,  # last-seen active job ids; any drop (any user) triggers a refresh
+    # Relevance gate
+    "rejections": [],          # list[dict] — documents the gate refused to score
 }
 for _k, _v in _DEFAULTS.items():
     if _k not in st.session_state:
@@ -504,8 +507,19 @@ def _promote_finished_my_jobs() -> bool:
         if run is not None:
             st.session_state.result = run
             st.toast(f"Evaluation finished: {run.get('proposal_acronym', '—')}", icon="✅")
+    # A document refused by the relevance gate is not a crash, and a toast
+    # disappears long before it can be read or acted on — keep those on screen.
+    new_rejections: list[dict[str, str]] = []
     for acronym, err in failed_messages:
-        st.toast(f"Evaluation failed for {acronym}: {err[:120]}", icon="⚠️")
+        if err.startswith(REJECTION_TAG):
+            new_rejections.append(
+                {"acronym": acronym, "message": err[len(REJECTION_TAG):].strip()}
+            )
+            st.toast(f"{acronym}: document not evaluated — see the notice below.", icon="🚫")
+        else:
+            st.toast(f"Evaluation failed for {acronym}: {err[:120]}", icon="⚠️")
+    if new_rejections:
+        st.session_state.rejections = list(st.session_state.rejections) + new_rejections
 
     return changed or bool(newest_done_call_id) or bool(failed_messages)
 
@@ -882,6 +896,44 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 
 @st.fragment(run_every="2s")
+def _render_rejections() -> None:
+    """Documents the relevance gate refused to score.
+
+    Deliberately persistent: no scorecard exists for these, so the only record
+    the user gets is this notice. It stays until dismissed.
+    """
+    rejections = st.session_state.rejections
+    if not rejections:
+        return
+
+    st.divider()
+    head = st.columns([6, 1], vertical_alignment="center")
+    with head[0]:
+        st.markdown(
+            theme.section(
+                "Not evaluated",
+                f"{len(rejections)} document(s) screened out before scoring",
+            ),
+            unsafe_allow_html=True,
+        )
+    with head[1]:
+        st.markdown('<span class="edf-ghost-marker"></span>', unsafe_allow_html=True)
+        if st.button("Dismiss", key="dismiss_rejections", width="stretch",
+                     help="Hide these notices"):
+            st.session_state.rejections = []
+            st.rerun()
+
+    for item in rejections:
+        st.warning(f"**{item['acronym']}** — {item['message']}", icon="🚫")
+    st.caption(
+        "No scores were produced, deliberately: scoring an off-topic document "
+        "yields plausible-looking numbers that mean nothing. If this verdict is "
+        "wrong, re-upload with “Evaluate even if screened out” ticked — the "
+        "report will then carry an explicit override warning."
+    )
+
+
+@st.fragment(run_every="2s")
 def _render_result_panel() -> None:
     result = st.session_state.result
     if not result:
@@ -1207,6 +1259,16 @@ with tab_evaluate:
             )
 
         st.write("")
+        # Nonce-keyed like the upload/paste widgets, so the override is scoped
+        # to ONE submission — a tick left behind must never silently disable
+        # the gate for the next proposal.
+        force_evaluate = st.checkbox(
+            "Evaluate even if screened out",
+            key=f"force_evaluate_{st.session_state.upload_nonce}",
+            help="By default a document that is not a proposal for this call is "
+                 "refused before scoring. Tick this to score it anyway — the "
+                 "report will carry an explicit override warning.",
+        )
         cta = st.columns([1])
         with cta[0]:
             st.markdown('<span class="edf-cta-marker"></span>', unsafe_allow_html=True)
@@ -1260,6 +1322,7 @@ with tab_evaluate:
                     chat_model=st.session_state.selected_chat_model,
                     embed_model=st.session_state.selected_embed_model,
                     call_context=st.session_state.call_context.strip() or None,
+                    force_evaluate=bool(force_evaluate),
                 )
                 st.session_state.my_job_ids = list(st.session_state.my_job_ids) + [job_id]
                 st.toast(
@@ -1279,6 +1342,7 @@ with tab_evaluate:
             except Exception as exc:
                 st.error(f"Could not queue evaluation: {exc}")
 
+    _render_rejections()
     _render_result_panel()
 
 with tab_history:

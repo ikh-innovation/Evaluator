@@ -18,6 +18,7 @@ import ollama
 from . import db, jobs
 from .config import CHAT_MODEL, EMBED_MODEL, OLLAMA_BASE_URL
 from .pipeline import evaluate_proposal
+from .relevance import REJECTION_TAG, IrrelevantDocumentError
 
 
 _thread: threading.Thread | None = None
@@ -73,9 +74,18 @@ def _process_one(job: dict) -> None:
             chat_model=chat_model,
             embed_model=embed_model,
             call_context=payload.get("call_context") or "",
+            force_evaluate=bool(payload.get("force_evaluate")),
         )
     except _JobCancelled:
         jobs.mark_failed(job_id, "Cancelled by user.")
+        return
+    except IrrelevantDocumentError as exc:
+        # Not a crash: the document was screened out before any scoring ran.
+        # Recorded as a failed job with a readable reason, tagged so the UI can
+        # explain it and offer an explicit "evaluate anyway" override.
+        jobs.mark_failed(
+            job_id, f"{REJECTION_TAG} {exc.report.get('message') or exc}"
+        )
         return
     except Exception as exc:
         jobs.mark_failed(job_id, f"{exc}\n{traceback.format_exc()[:600]}")

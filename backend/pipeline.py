@@ -23,6 +23,7 @@ from .config import (
 )
 from .evaluator import evaluate_criterion, predict_band, summarise
 from .ingestion import detect_esr_markers, extract_sections, extract_text
+from .relevance import enforce as enforce_relevance
 
 ProgressCb = Callable[[str, float], None]
 
@@ -289,6 +290,7 @@ def evaluate_proposal(
     chat_model: str = CHAT_MODEL,
     embed_model: str = EMBED_MODEL,
     call_context: str = "",
+    force_evaluate: bool = False,
 ) -> dict:
     """Full pipeline in one call. Accepts a pre-built chunk_index to skip re-embedding."""
     if chunk_index is not None:
@@ -327,8 +329,23 @@ def evaluate_proposal(
     if progress_cb:
         progress_cb("LLM ready", 0.25)
 
+    # Relevance gate — refuse the wrong document before spending LLM time on
+    # scoring it. Nothing downstream checks applicability: retrieval has no
+    # similarity floor and EVAL_PROMPT never asks whether the document is
+    # on-topic, so without this an unrelated file lands mid-scale.
     if progress_cb:
-        progress_cb("Selecting relevant excerpts per criterion…", 0.25)
+        progress_cb("Checking document relevance…", 0.26)
+    relevance = enforce_relevance(
+        index,
+        criteria,
+        call_context=call_context,
+        chat_model=chat_model,
+        embed_model=embed_model,
+        force=force_evaluate,
+    )
+
+    if progress_cb:
+        progress_cb("Selecting relevant excerpts per criterion…", 0.27)
     excerpts: list[dict[str, Any]] = [
         get_proposal_excerpt(index, crit["name"], crit.get("description", ""), embed_model=embed_model)
         for crit in criteria
@@ -401,6 +418,10 @@ def evaluate_proposal(
     # like an ESR / scoresheet rather than a Part B proposal (FIX README v2 §STEP 0).
     esr_markers = detect_esr_markers(index["chunks"])
     warnings: list[str] = []
+    # The relevance verdict leads: when a run was forced past the gate, or the
+    # gate could only warn, that caveat outranks every other warning.
+    if relevance.get("warning"):
+        warnings.append(relevance["warning"])
     if esr_markers:
         warnings.append(
             "The ingested document opens with evaluation-report language "
@@ -432,6 +453,7 @@ def evaluate_proposal(
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "chunk_count": len(index["chunks"]),
         "ingest_warning": ingest_warning,
+        "relevance": relevance,
         "notes": (
             "Internal pre-screening output. Final judgement rests with human "
             "evaluators. Financial coherence (budget justification, travel and "

@@ -81,3 +81,29 @@ MAIN_GPU: int = int(os.environ.get("EDF_MAIN_GPU", "0"))
 # + JSON output ≈ 11k tokens. Capping this avoids Ollama's auto-sizing
 # (observed defaulting to 262144) wasting VRAM/time on an oversized KV-cache.
 NUM_CTX: int = int(os.environ.get("EDF_NUM_CTX", "16384"))
+# ---------------------------------------------------------------------------
+# Relevance gate
+# ---------------------------------------------------------------------------
+# Refuses to score documents that are not proposals for the call being
+# evaluated. Without it the pipeline scores anything: retrieval always returns
+# its top-K chunks (no similarity floor) and the judge prompt never asks
+# whether the document is on-topic, so an unrelated file lands mid-scale.
+#
+#   "block" (default) — raise IrrelevantDocumentError, produce no scorecard.
+#   "warn"            — evaluate anyway, attach the verdict to ingest_warning.
+#   "off"             — skip the check entirely.
+RELEVANCE_GATE_MODE: str = os.environ.get("EDF_RELEVANCE_GATE", "block").strip().lower()
+
+# Cosine similarity between a criterion and the best-matching chunk. These are
+# corroborating signals only — the absolute values depend on EDF_EMBED_MODEL,
+# so the LLM verdict decides and similarity never blocks on its own except via
+# the hard floor below, which applies only when the LLM check is unavailable.
+RELEVANCE_MIN_SIMILARITY: float = float(
+    os.environ.get("EDF_RELEVANCE_MIN_SIMILARITY", "0.35")
+)
+RELEVANCE_HARD_FLOOR_SIMILARITY: float = float(
+    os.environ.get("EDF_RELEVANCE_HARD_FLOOR", "0.20")
+)
+
+# How much of the document's opening the relevance classifier sees.
+RELEVANCE_PROBE_CHARS: int = int(os.environ.get("EDF_RELEVANCE_PROBE_CHARS", "6000"))

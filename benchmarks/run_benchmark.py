@@ -91,6 +91,10 @@ def run_pair(pair_dir: Path, chat_model: str) -> dict:
         chat_model=chat_model,
         call_context=call_context,
         progress_cb=lambda msg, frac: print(f"  {frac * 100:3.0f}% {msg}", flush=True),
+        # Benchmarks measure scoring calibration against official ESR scores,
+        # not the relevance gate — and their corpus is known-good proposals.
+        # Bypass the gate so a false rejection can never abort a benchmark run.
+        force_evaluate=True,
     )
 
     proposal_norm = _norm(extract_text(proposal_bytes, suffix))
