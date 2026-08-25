@@ -344,6 +344,10 @@ def evaluate_proposal(
         force=force_evaluate,
     )
 
+    # Survives only when the caller overrode the gate; drives the judge's
+    # screening notice so the override changes the scoring, not just the label.
+    gate_off_topic = relevance.get("verdict") == "off_topic"
+
     if progress_cb:
         progress_cb("Selecting relevant excerpts per criterion…", 0.27)
     excerpts: list[dict[str, Any]] = [
@@ -368,6 +372,13 @@ def evaluate_proposal(
             call_context=call_context,
             full_document=excerpts[i]["full_document"],
             coverage_ratio=excerpts[i]["coverage_ratio"],
+            # Only ever true on an overridden run — an un-overridden off-topic
+            # document raises at the gate and never reaches scoring. Without
+            # this the override was cosmetic: the judge scored the document as
+            # though it had never been screened.
+            off_topic=gate_off_topic,
+            off_topic_document_type=relevance.get("document_type", ""),
+            off_topic_reason=relevance.get("reason", ""),
         )
         completed += 1
         if progress_cb:

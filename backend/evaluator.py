@@ -34,6 +34,36 @@ almost always means the evaluation failed to probe, not that the proposal is
 flawless. Equally, do not drift to the middle: follow the findings."""
 
 
+OFF_TOPIC_NOTICE = """
+=== SCREENING NOTICE — READ BEFORE APPLYING THE RULES BELOW ===
+Before evaluation this document was screened and identified as {document_type},
+NOT a proposal responding to this call.{reason_clause}
+
+The following OVERRIDE the numbered rules below:
+
+(a) Rule 4 is SUSPENDED. Absent proposal content — work packages, partner
+    roles, consortium structure, work plan, milestones, risk register — is NOT
+    an input gap and NOT a truncation artefact. It is absent because this is
+    not a proposal. Treat the criterion as unaddressed and score it so.
+(b) Do NOT assume a fuller proposal exists behind your input. It does not.
+    Never write "the full proposal likely contains …" or reason that missing
+    material "may well exist" elsewhere in the document.
+(c) The question is NOT "is the work described here good?" — it is "does THIS
+    DOCUMENT, as it stands, address THIS CRITERION as a proposal for this
+    call?" The test is not whether the text contains subject matter related to
+    the criterion, but whether it constitutes a proposal addressing it. A
+    document describing completed work is not a proposal for future work,
+    however excellent that work is. Technically outstanding material that does
+    not address the criterion as a proposal scores "fails" (0) — this is
+    exactly what the rubric's band 0 ("fails to address the criterion or
+    cannot be assessed") is for.
+(d) Do not manufacture failure either. If part of this document genuinely
+    responds to this criterion, say which part and score that on its merits.
+    Report what is there, not what you expect to be missing.
+=== END SCREENING NOTICE ===
+"""
+
+
 _BAND_VALUES = {
     "fails": 0.0,
     "poor": 1.0,
@@ -60,7 +90,7 @@ Criterion under evaluation:
 - Action type: {action_type}
 {call_context_block}
 INPUT SCOPE: {input_scope}
-
+{relevance_block}
 Proposal input (each block is labelled with its source section):
 ---
 {proposal_text}
@@ -90,6 +120,9 @@ Rules:
    under "input_gaps". NEVER list it as a weakness or missing evidence, and
    NEVER reduce the score because of it. Penalise only what the visible text
    demonstrably fails to contain or handles badly.
+   EXCEPTION: this rule is SUSPENDED when a SCREENING NOTICE appears above.
+   It exists to stop truncated input being mistaken for a deficient proposal;
+   it must never be used to excuse a document that is not a proposal at all.
 5. MANDATORY weakness scan before scoring. In "weakness_scan", list the 3–5
    aspects of the visible text that a hostile expert reviewer would probe for
    THIS criterion — unsubstantiated performance figures, techniques the text
@@ -268,6 +301,9 @@ def evaluate_criterion(
     call_context: str = "",
     full_document: bool = False,
     coverage_ratio: float | None = None,
+    off_topic: bool = False,
+    off_topic_document_type: str = "",
+    off_topic_reason: str = "",
 ) -> dict:
     if full_document:
         input_scope = "FULL PROPOSAL — you are seeing the complete document text."
@@ -282,6 +318,26 @@ def evaluate_criterion(
             "document. Sections not shown to you may well exist in the full "
             "proposal; apply rule 4 strictly."
         )
+        if off_topic:
+            # The stock wording invites the model to assume a fuller proposal
+            # sits behind the excerpts — the precise reasoning that lets an
+            # off-topic document escape penalty. Say what partial really means.
+            input_scope = (
+                f"PARTIAL — retrieval-selected excerpts covering {pct} of the "
+                "document. What you cannot see is more of THIS document, which "
+                "the screening notice below identifies as not a proposal."
+            )
+
+    relevance_block = (
+        OFF_TOPIC_NOTICE.format(
+            document_type=off_topic_document_type or "not a proposal for this call",
+            reason_clause=(
+                f" Screening verdict: {off_topic_reason}" if off_topic_reason else ""
+            ),
+        )
+        if off_topic
+        else ""
+    )
 
     call_context = (call_context or "").strip()[:MAX_CALL_CONTEXT_CHARS]
     call_context_block = (
@@ -301,6 +357,7 @@ def evaluate_criterion(
         action_type=action_type,
         call_context_block=call_context_block,
         input_scope=input_scope,
+        relevance_block=relevance_block,
         proposal_text=proposal_text[:MAX_PROPOSAL_CHARS_INLINE] or "(empty proposal text)",
     )
     msg = _chat_json_model(chat_model).invoke(prompt)
