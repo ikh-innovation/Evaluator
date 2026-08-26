@@ -64,6 +64,9 @@ The following OVERRIDE the numbered rules below:
 """
 
 
+# Nominal value of each rubric band on the canonical EDF 0–5 scale. The model
+# always scores on this scale (see EVAL_PROMPT); a criterion configured with a
+# different max_score is rescaled in _coerce_score, not asked of the model.
 _BAND_VALUES = {
     "fails": 0.0,
     "poor": 1.0,
@@ -72,6 +75,12 @@ _BAND_VALUES = {
     "very good": 4.0,
     "excellent": 5.0,
 }
+
+# Half-steps (4.5, 3.5, …) sit deliberately between two bands — rule 6 of
+# EVAL_PROMPT assigns them meaning — so a score is consistent with its band
+# when it lies within half a band of the band's nominal value, not only when it
+# equals it exactly.
+_BAND_TOLERANCE = 0.5
 
 
 EVAL_PROMPT = """You are an experienced EDF (European Defence Fund) proposal evaluator
@@ -213,13 +222,8 @@ Write a concise (5-8 sentence) ESR-style summary that:
   findings support them; for a uniformly strong proposal say so instead.
 Return plain prose only — no JSON, no markdown."""
 
-BAND_PROMPT = """Based on a weighted total of {weighted_total}/{max_weighted_total}
-(threshold {threshold}) and per-criterion scores {scores}, classify the
-proposal into EXACTLY ONE of these labels:
-- "Likely funded"
-- "Reserve list / borderline"
-- "Likely rejected"
-Return only the label, nothing else."""
+# No BAND_PROMPT: the outcome band is arithmetic on the weighted total, not a
+# model judgement — see predict_band.
 
 
 # Keyed by model name so a per-job model override (chosen in the UI) doesn't
@@ -274,13 +278,70 @@ def _parse_json(text: str) -> dict[str, Any]:
     raise ValueError(f"Could not parse JSON from model output: {text[:400]}")
 
 
-def _coerce_score(value: Any) -> float:
+def _coerce_score(value: Any, max_score: float = 5.0) -> float | None:
+    """Model score on the canonical 0–5 rubric → the criterion's own scale.
+
+    A criterion may be configured with a max_score other than 5 (the UI allows
+    1–10). The model is never asked to reason on that scale — it applies the
+    EDF rubric it knows, 0–5 in 0.5 increments, and the result is rescaled
+    here. Clamping to 5 and then scaling is what keeps the score inside the
+    criterion's own maximum: clamping at a literal 5.0 while max_weighted_total
+    counted max_score made the ceiling unreachable at max_score > 5, and let
+    weighted_total exceed max_weighted_total at max_score < 5.
+
+    Returns None when the model emitted nothing numeric, so the caller can fall
+    back to the band label instead of silently recording a 0 ("fails").
+    """
     try:
         s = float(value)
     except Exception:
-        s = 0.0
+        return None
     s = max(0.0, min(5.0, s))
-    return round(s * 2) / 2
+    return round(s * 2) / 2 * (max_score / 5.0)
+
+
+def _band_for_score(score_0_5: float) -> str:
+    """Nearest rubric band for a canonical 0–5 score; ties go to the lower band."""
+    return min(
+        _BAND_VALUES,
+        key=lambda b: (abs(_BAND_VALUES[b] - score_0_5), _BAND_VALUES[b]),
+    )
+
+
+def _reconcile_band_and_score(
+    band: Any, score: Any, max_score: float = 5.0
+) -> tuple[str, float, bool]:
+    """Force the model's band and score onto a single consistent verdict.
+
+    The two are generated independently and drift: a "good" band carrying a 5.0
+    printed as "good" in the report while the 5.0 landed in the weighted total.
+    The band leads, because it is what rule 6 derives from the classified
+    weaknesses; the score is pulled to the nearest value that band admits,
+    which preserves the half-step resolution the rubric relies on. A missing or
+    unrecognised band is derived from the score instead, so the pair is always
+    self-consistent.
+
+    Returns (band, score, adjusted) — `adjusted` is True when the model's own
+    pair was inconsistent and had to be moved.
+    """
+    scale = max_score / 5.0 if max_score > 0 else 0.0
+    label = str(band or "").strip().lower()
+    coerced = _coerce_score(score, max_score)
+
+    if label not in _BAND_VALUES:
+        if coerced is None:
+            return "fails", 0.0, True
+        derived = _band_for_score(coerced / scale if scale else 0.0)
+        return derived, coerced, True
+
+    nominal = _BAND_VALUES[label] * scale
+    if coerced is None:
+        return label, nominal, True
+
+    low = max(0.0, nominal - _BAND_TOLERANCE * scale)
+    high = min(max_score, nominal + _BAND_TOLERANCE * scale)
+    adjusted = min(high, max(low, coerced))
+    return label, adjusted, adjusted != coerced
 
 
 _CONF_ORDER = ("low", "medium", "high")
@@ -297,6 +358,7 @@ def evaluate_criterion(
     criterion_description: str,
     weight: float,
     action_type: str,
+    max_score: float = 5.0,
     chat_model: str = CHAT_MODEL,
     call_context: str = "",
     full_document: bool = False,
@@ -372,7 +434,15 @@ def evaluate_criterion(
     parsed.setdefault("evaluator_comment", "")
     parsed.setdefault("confidence", "medium")
     parsed.setdefault("band", "")
-    parsed["score"] = _coerce_score(parsed.get("score", 0))
+
+    # Band and score are reconciled into one verdict — the model reports them
+    # independently and they drift. Raw values are kept as telemetry so a run
+    # stays auditable (same idiom as model_confidence / confidence_cap below).
+    parsed["model_band"] = parsed["band"]
+    parsed["model_score"] = parsed.get("score")
+    parsed["band"], parsed["score"], parsed["score_adjusted"] = (
+        _reconcile_band_and_score(parsed.get("band"), parsed.get("score"), max_score)
+    )
 
     # Confidence is capped mechanically by input coverage — the model cannot
     # report "high" on partial input, and reported input gaps force "low"
@@ -401,7 +471,8 @@ def summarise(
 ) -> str:
     block = "\n\n".join(
         (
-            f"{c['name']} (score {c['score']}/5, weight x{c['weight']}):\n"
+            f"{c['name']} (score {c['score']}/{c.get('max_score', 5.0):g}, "
+            f"weight x{c['weight']}):\n"
             f"  Strengths: {'; '.join(c.get('strengths') or []) or '—'}\n"
             f"  Weaknesses: {'; '.join(c.get('weaknesses') or []) or '—'}"
         )
@@ -419,6 +490,11 @@ def summarise(
 
 
 _VALID_BANDS = ("Likely funded", "Reserve list / borderline", "Likely rejected")
+_FUNDED, _BORDERLINE, _REJECTED = _VALID_BANDS
+
+# Share of the maximum above which a passing proposal is called fundable
+# rather than borderline. Only consulted once the threshold gate is cleared.
+_FUNDED_RATIO = 0.7
 
 
 def predict_band(
@@ -428,19 +504,22 @@ def predict_band(
     threshold: float | None,
     chat_model: str = CHAT_MODEL,
 ) -> str:
-    msg = _chat_text_model(chat_model).invoke(
-        BAND_PROMPT.format(
-            weighted_total=weighted_total,
-            max_weighted_total=max_weighted_total,
-            threshold=threshold if threshold is not None else "—",
-            scores=[c["score"] for c in per_criterion],
-        )
-    )
-    out = msg.content.strip().strip('"').strip("'")
-    for label in _VALID_BANDS:
-        if label.lower() in out.lower():
-            return label
+    """Classify the run from its weighted total. Deterministic, not model-led.
+
+    This used to ask the LLM for the label and take whatever came back, with
+    the threshold consulted only if no label matched — so a below-threshold
+    proposal could be stored as "Likely funded" while the PDF's own PASS/FAIL
+    tile, computed from the same threshold, said FAIL. The rule below is the
+    one that was previously the unreachable fallback, promoted to be the rule:
+    the threshold decides pass/fail, and share-of-maximum separates a
+    comfortable pass from a borderline one.
+
+    per_criterion and chat_model are accepted for call-site compatibility;
+    neither is needed now that no model call is made.
+    """
     if threshold is not None and weighted_total < threshold:
-        return "Likely rejected"
+        return _REJECTED
     ratio = weighted_total / max_weighted_total if max_weighted_total else 0.0
-    return "Likely funded" if ratio >= 0.7 else "Reserve list / borderline"
+    if threshold is None and ratio < 0.5:
+        return _REJECTED
+    return _FUNDED if ratio >= _FUNDED_RATIO else _BORDERLINE
