@@ -349,7 +349,7 @@ def evaluate_proposal(
     gate_off_topic = relevance.get("verdict") == "off_topic"
 
     if progress_cb:
-        progress_cb("Selecting relevant excerpts per criterion…", 0.27)
+        progress_cb("Selecting relevant experts per criterion…", 0.27)
     excerpts: list[dict[str, Any]] = [
         get_proposal_excerpt(index, crit["name"], crit.get("description", ""), embed_model=embed_model)
         for crit in criteria
