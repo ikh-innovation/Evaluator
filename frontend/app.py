@@ -333,6 +333,18 @@ def _criterion_card(c: dict[str, Any]) -> None:
                 ),
                 unsafe_allow_html=True,
             )
+        if c.get("band_rationale"):
+            st.markdown(
+                '<div class="edf-lgroup"><div class="lg-h"><i></i>Why this band</div>'
+                f"{theme.prose(c['band_rationale'])}</div>",
+                unsafe_allow_html=True,
+            )
+        if c.get("severity_envelope"):
+            st.caption(
+                f"Score adjustment: {c['severity_envelope']} "
+                f"(model reported {c.get('model_band') or '—'} / "
+                f"{c.get('model_score')})."
+            )
         if c.get("evaluator_comment"):
             st.markdown(
                 '<div class="edf-lgroup"><div class="lg-h"><i></i>Evaluator comment</div>'

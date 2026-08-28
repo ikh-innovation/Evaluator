@@ -772,6 +772,15 @@ def _criterion_detail(c: dict[str, Any]) -> list[Any]:
         block.append(Paragraph("INPUT GAPS  (not seen by the model — not penalised)", _LABEL))
         block += _bullets(c.get("input_gaps"))
 
+    if c.get("band_rationale"):
+        block.append(Paragraph("WHY THIS BAND", _LABEL))
+        block.append(Paragraph(_p(c["band_rationale"]), _COMMENT))
+
+    if c.get("severity_envelope"):
+        block.append(Paragraph(
+            escape(f"Score adjustment: {c['severity_envelope']}."), _FOOTNOTE
+        ))
+
     if c.get("evaluator_comment"):
         block.append(Paragraph("EVALUATOR COMMENT", _LABEL))
         block.append(Paragraph(_p(c["evaluator_comment"]), _COMMENT))
