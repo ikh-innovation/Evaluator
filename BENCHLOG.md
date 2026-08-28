@@ -198,4 +198,139 @@ more readily.
 
 ---
 
-<!-- Append FIX 1a, 1c, 1b, 1d, … below, one section per commit. -->
+## FIX 2 — Score compression fixed: substance-led banding + severity envelope (2026-08-28)
+
+**Reported symptom:** across more than three proposals every report came back at
+**80%** — every criterion 4.0/5, "very good". Confirmed in `data/runs.sqlite`:
+of the stored per-criterion scores, `4.0` appears 6× against one `3.0`, one
+`2.0` and one `1`, and **every** stored `band` is `"very good"`. This is the
+residual FIX 1 flagged and did not close.
+
+**Root cause — three compounding prompt defects, all pushing to the same value:**
+
+1. **Rule 5 imposed a quota.** "list the 3–5 aspects … a hostile reviewer would
+   probe" made the probe count a target rather than a property of the text. The
+   model filled it every time: FIX 1's own verification table shows **5 probes
+   on all six criteria**, 3–4 of them "weakness".
+2. **Rule 6 scored by weakness COUNT.** The ladder read "4.5 = one or two minor
+   weaknesses; 4.0 = several minor weaknesses". Feed a rule that maps "several
+   minor" → 4.0 with a quota that manufactures "several minor" every time and
+   4.0 is arithmetically forced, whatever the proposal says. The ladder was also
+   purely subtractive from a notional 5.0 — positive substance never entered the
+   band, so a criterion could not be scored *up* for answering well.
+3. **Rule 6 asked for a classification the schema could not express.** It told
+   the model to classify each weakness SIGNIFICANT or MINOR, but
+   `weakness_scan[].verdict` only admitted `"weakness" | "cleared"` and no other
+   field carried severity. The classification was invisible, unverifiable, and
+   in practice skipped — so the one signal that could separate a 3.0 from a 4.5
+   never left the model.
+   Aggravating factor: the single illustration was `"band": "very good",
+   "score": 4.0` — a direct anchor at `temperature=0.0`.
+
+**Changes (`backend/evaluator.py`):**
+- Rubric gains a **DISCRIMINATION** paragraph: a proposal's criteria are not
+  equally well addressed, real ESRs spread 3.5–5.0, an identical score on every
+  criterion is an evaluation that averaged rather than judged. Also corrects
+  FIX 1's overreach that 5.0 requires an empty weaknesses list — real ESRs award
+  5.0 with a "However, …" attached, which had made the top of the scale dead.
+- Rule 5: quota removed — probe count is set by the text ("a thin or evasive
+  section deserves more probes than a thorough one") and explicitly must not be
+  a proxy for the score. `verdict` becomes **three-way**:
+  `"significant" | "minor" | "cleared"`, each defined in place, with a warning
+  against softening a real finding to "minor" to be safe.
+- Rule 6 restructured into **STEP A (band from positive substance)** — how
+  completely and how convincingly this text answers this criterion — and
+  **STEP B (half-step from the classified probes)**, with the explicit rule that
+  two criteria carrying the same number of minor weaknesses must *not* score the
+  same. STEP B states the enforced bounds numerically (see envelope below).
+- New required output field **`band_rationale`**: one or two sentences on why
+  this band and not the one above and not the one below. Forcing the comparison
+  is what breaks the drift to a comfortable middle — "if you cannot say why the
+  band above is wrong, the band above is probably right."
+- Illustration replaced by **two** examples at **4.5 (`excellent`)** and **3.0
+  (`good`)**, prefaced by a note that the bands shown are arbitrary. Neither
+  sits on 4.0; the anchor is gone.
+
+**Deterministic backstop (`backend/evaluator.py`) — `_apply_severity_envelope`:**
+prose alone did not survive contact with the model before, so the severities the
+model itself records now bound the score it keeps. Applied after
+`_reconcile_band_and_score`, band re-derived from any moved score:
+
+| model's own scan | score bound |
+|---|---|
+| 1 "significant" probe | ≤ 4.0 |
+| 2 | ≤ 3.5 |
+| 3 | ≤ 3.0 |
+| 4+ | ≤ 2.5 |
+| every probe "cleared", no weakness kept (≥2 probes) | **≥ 4.5** |
+
+The floor matters as much as the ceilings: ceilings alone would have turned "4.0
+everywhere" into "4.0 or lower everywhere" rather than a spread. It is
+suppressed on an off-topic (overridden-gate) run, where the screening notice and
+not the probe tally governs, and it only applies to bands "good" and above so an
+unaddressed criterion with an empty scan can never be lifted.
+Telemetry added per criterion: `significant_weakness_count`,
+`minor_weakness_count`, `cleared_probe_count`, `severity_envelope` (the
+adjustment note, `""` when nothing moved), alongside the existing
+`model_band`/`model_score`.
+
+**Run-level guard (`backend/pipeline.py`):** a run whose criteria all land on the
+identical score (≥3 criteria) now raises a calibration warning — the collapse is
+reported as undifferentiated rather than passing as agreement. A second warning
+lists criteria the severity envelope moved.
+
+**Surfaced (`frontend/app.py`, `frontend/pdf_report.py`):** "Why this band" and
+the score-adjustment note per criterion, in both the UI card and the PDF.
+
+### Verification (static — no Ollama on this host, see caveat)
+
+| Check | Result |
+|---|---|
+| `ast.parse` on all five changed files | ✓ |
+| `EVAL_PROMPT.format()`, normal + off-topic branch | ✓ (14.3k-char skeleton) |
+| Brace escaping — `{{`/`}}` balanced 10/10, 9 placeholders all bound | ✓ |
+| Both illustrations parse as JSON, carry all 11 schema keys, verdicts in the new enum, kept probes == weaknesses | ✓ |
+| Illustrations stable under `_reconcile_band_and_score` + envelope (an example the code would correct teaches the wrong mapping) | ✓ |
+| `_severity_counts` — mixed/legacy `"weakness"`/junk/non-list | ✓ (legacy → minor) |
+| Envelope: 12 ceiling/floor cases, `max_score` 5 and 10, `max_score=0` guard | ✓ |
+| Band/score self-consistency over all 480 (sig, minor, cleared, band) combinations | ✓ 0 inconsistent |
+| Worst-case prompt vs `EDF_NUM_CTX=32768` | ✓ 19.5k in + 1.2k out, 12.0k headroom (was ~17.1k) |
+
+**⚠ Not yet verified against the model.** No Python or running Ollama on the
+authoring host, so no end-to-end run was executed. The intended effect —
+per-criterion spread — is a claim about model behaviour and is unproven until
+the runbook below is executed on the deployment host.
+
+### Runbook — confirm the fix on the deployment host
+
+1. `docker compose up -d --build` (containers COPY the code; a rebuild is
+   mandatory — see STEP 0b).
+2. `python benchmarks/run_synthetic.py` — the direction test is the cheapest
+   probe and now prints the severity counts and `band_rationale`. Expect the
+   excellent section ≥ 4.5 (the clean-scan floor should fire) and the deficient
+   section ≤ 3.0, gap ≥ 1.5.
+3. Re-run the SWARMER Part B and compare against the real DEFIS ESR
+   (3.5, 4.0, 4.5, 4.0, 5.0, 4.5 — **38.00/45**):
+
+| Criterion | real ESR | tool (FIX 1) | tool (FIX 2) | sig/minor/cleared | envelope |
+|---|---|---|---|---|---|
+| Excellence | 3.5 | 4.0 | | | |
+| Innovation | 4.0 | 4.0 | | | |
+| Competitiveness | 4.5 | 4.0 | | | |
+| EDTIB autonomy | 4.0 | 4.0 | | | |
+| Cross-border coop | 5.0 | 4.0 | | | |
+| Implementation | 4.5 | 4.0 | | | |
+| **Weighted total** | **38.00/45** | **36.0/45** | | | |
+
+   Success is **spread**, not a closer total: ≥3 distinct scores across the six
+   criteria, and no run-level "every criterion received the SAME score" warning.
+   Rank correlation against the ESR column matters more than absolute agreement.
+4. If every criterion still lands on one value, read the new
+   `significant_weakness_count` column first. All-zero means the model is still
+   refusing to call anything significant — tighten the "significant" definition
+   in rule 5 rather than touching the envelope, which can only bound a score and
+   cannot create discrimination on its own.
+
+---
+
+<!-- Append FIX 2a, 3, … below, one section per commit. -->

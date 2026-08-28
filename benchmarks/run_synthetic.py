@@ -49,7 +49,10 @@ def _run(label: str, path: Path) -> dict:
     )
     print(json.dumps(
         {k: res[k] for k in
-         ("band", "score", "confidence", "strengths", "weaknesses",
+         ("band", "score", "band_rationale", "confidence",
+          "significant_weakness_count", "minor_weakness_count",
+          "cleared_probe_count", "severity_envelope",
+          "strengths", "weaknesses",
           "missing_evidence", "input_gaps", "evaluator_comment")},
         indent=2, ensure_ascii=False,
     ))

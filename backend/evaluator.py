@@ -28,10 +28,21 @@ EDF_RUBRIC = """EDF scoring rubric (apply per criterion, 0–5 in 0.5 increments
 
 Calibration (from real EDF Evaluation Summary Reports): even proposals that
 win funding typically score 3.5–4.5 on most criteria, each carrying explicit
-"However, …" weaknesses; a 5.0 is exceptional and must be earned by clearing
-every probe of the weakness scan. A run of straight 5.0s with no weaknesses
-almost always means the evaluation failed to probe, not that the proposal is
-flawless. Equally, do not drift to the middle: follow the findings."""
+"However, …" weaknesses. A 5.0 is exceptional but NOT unreachable, and it does
+not require an empty weaknesses list — real ESRs award 5.0 to a criterion that
+is answered convincingly while still attaching a "However, …". A run of
+straight 5.0s almost always means the evaluation failed to probe.
+
+DISCRIMINATION (the most important calibration point): a proposal's criteria
+are NOT equally well addressed. In real ESRs the scores of one proposal spread
+across roughly 3.5–5.0 — one criterion is the proposal's strongest and one is
+its weakest, and the report says which. A scorecard that gives every criterion
+the same score has not evaluated the proposal; it has averaged it. You assess
+one criterion at a time and cannot see the others, so the discrimination has to
+come from judging THIS criterion on its own merits with the full range live:
+ask how convincingly this specific text answers this specific criterion, and
+let the answer land wherever it lands. Do not settle on a comfortable middle
+value, and in particular do not treat 4.0 as a default resting point."""
 
 
 OFF_TOPIC_NOTICE = """
@@ -132,32 +143,71 @@ Rules:
    EXCEPTION: this rule is SUSPENDED when a SCREENING NOTICE appears above.
    It exists to stop truncated input being mistaken for a deficient proposal;
    it must never be used to excuse a document that is not a proposal at all.
-5. MANDATORY weakness scan before scoring. In "weakness_scan", list the 3–5
-   aspects of the visible text that a hostile expert reviewer would probe for
+5. MANDATORY weakness scan before scoring. In "weakness_scan", probe the
+   aspects of the visible text that a hostile expert reviewer would attack for
    THIS criterion — unsubstantiated performance figures, techniques the text
    relies on but under-specifies, internal inconsistencies, unclear
    differentiation from existing systems or prior projects, thin treatment of
-   a dependency or risk the concept hinges on. For each probe set "verdict"
-   to "weakness" (and carry it into the weaknesses list) or "cleared" (the
-   visible text genuinely settles it — say where). Do not invent criticism: a
-   probe the text settles is "cleared". But an empty weaknesses list is
-   legitimate ONLY when every probe was genuinely cleared — official ESRs
-   attach at least one "However, …" weakness to most criteria even for
-   proposals that win funding. Do not inflate and do not deflate.
-6. Score in two steps. First classify each weakness you kept:
-   - SIGNIFICANT: it materially endangers the achievement of this
-     criterion's objectives (e.g. no credible plan, unmanaged major risk,
-     unsubstantiated core claim).
-   - MINOR: it does not endanger the criterion's objectives but a real
-     evaluator would still write it as a "However, …" (insufficient detail or
-     substantiation of a specific material element, missing quantitative
-     comparison the text itself invites, one thinly treated sub-aspect).
-   Then derive band and score together: "excellent" (5.0) = every probe
-   cleared, no weaknesses; 4.5 = one or two minor weaknesses; "very good"
-   (4.0) = several minor weaknesses, none significant; 3.5 = many minor or
-   one borderline-significant weakness; "good" (3.0) = one or two significant
-   shortcomings; "fair" (2.0) = significant weaknesses across several
-   aspects; "poor"/"fails" = inadequately addressed or cannot be assessed.
+   a dependency or risk the concept hinges on. Probe as many aspects as the
+   text genuinely invites: a thin or evasive section deserves more probes than
+   a thorough one, so the NUMBER of probes is a property of this text and must
+   never be a quota you fill to reach a target score. For each probe set
+   "verdict" to one of:
+   - "significant": a real shortcoming that materially endangers the
+     achievement of this criterion's objectives (no credible plan, an
+     unmanaged major risk, an unsubstantiated claim the criterion rests on, a
+     required element simply absent).
+   - "minor": a real shortcoming a hostile reviewer would write as a
+     "However, …" but that does not endanger the criterion's objectives
+     (insufficient substantiation of one material element, a missing
+     quantitative comparison the text itself invites, one thinly treated
+     sub-aspect).
+   - "cleared": the visible text genuinely settles the probe — say where.
+   Carry every "significant" and "minor" probe into the weaknesses list; never
+   carry a "cleared" one. Do not invent criticism and do not soften a real
+   finding into "minor" to be safe: the severity split is what separates a 3.0
+   from a 4.5, so calling a genuinely dangerous gap "minor" flattens the whole
+   scorecard. An empty weaknesses list is legitimate only when every probe was
+   genuinely cleared.
+6. Score in two steps.
+   STEP A — place the band by asking how convincingly THIS text answers THIS
+   criterion, judged on its positive substance: how completely the criterion's
+   aspects are covered, how well evidenced and technically credible the
+   answers are, and how much of it is convincing rather than merely present.
+     "excellent" (5.0) — answered convincingly across every aspect; whatever
+       remains is genuinely peripheral.
+     "very good" (4.0) — answered very well; a small number of real
+       shortcomings.
+     "good" (3.0) — answered well, but a number of shortcomings remain.
+     "fair" (2.0) — broadly addressed; significant weaknesses across several
+       aspects.
+     "poor" (1.0) / "fails" (0) — inadequately addressed, or cannot be
+       assessed from the visible text.
+   STEP B — place the half-step inside that band using the classified probes.
+   Within a band, move UP a half-step when the shortcomings are peripheral or
+   presentational and the substance is strong; move DOWN a half-step when a
+   shortcoming touches something the criterion materially needs. The severity
+   verdicts bound the result — these limits are enforced after you answer, so
+   a score outside them will be moved:
+     one "significant" probe  → 4.0 at most
+     two                      → 3.5 at most
+     three                    → 3.0 at most
+     four or more             → 2.5 at most
+     every probe "cleared", no weakness kept → 4.5 at least
+   Inside those bounds, with no "significant" verdict, the choice between 4.0,
+   4.5 and 5.0 is decided by how convincing the positive substance is, NOT by
+   counting the minor ones.
+   CRITICAL — weaknesses subtract from a level set by the proposal's positive
+   substance; they do not by themselves define it. Two criteria carrying the
+   same number of minor weaknesses must NOT receive the same score: the one
+   whose visible text answers its criterion more completely and more
+   convincingly scores higher. Scoring by weakness count alone is the single
+   most common failure of this evaluation and it produces a scorecard where
+   every criterion reads 4.0.
+   Before you commit to a score, state in "band_rationale" why this band and
+   not the one immediately above and not the one immediately below, referring
+   to the substance you found — one or two sentences. If you cannot say why
+   the band above is wrong, the band above is probably right.
    Output the band in "band" and the consistent value in "score".
 7. Confidence reflects input coverage first, evidence second:
    - "high": you saw the full proposal (or every section this criterion
@@ -178,8 +228,9 @@ Output STRICT JSON ONLY (no markdown, no prose) with this exact schema:
 {{
   "band": "fails" | "poor" | "fair" | "good" | "very good" | "excellent",
   "score": <number, 0..5, in 0.5 increments, consistent with band>,
+  "band_rationale": string,
   "confidence": "low" | "medium" | "high",
-  "weakness_scan": [{{"aspect": string, "verdict": "weakness" | "cleared", "reason": string}}, ...],
+  "weakness_scan": [{{"aspect": string, "verdict": "significant" | "minor" | "cleared", "reason": string}}, ...],
   "strengths": [string, ...],
   "weaknesses": [string, ...],
   "missing_evidence": [string, ...],
@@ -188,21 +239,38 @@ Output STRICT JSON ONLY (no markdown, no prose) with this exact schema:
   "recommendations": [string, ...]
 }}
 
-Illustration of a valid output (FICTIONAL — never reuse its entities or
-wording; shown only to demonstrate the expected critical depth. An "excellent"
-with empty weaknesses is equally legitimate, but only when every scan probe is
-genuinely cleared):
-{{"band": "very good", "score": 4.0, "confidence": "medium",
+Two illustrations of valid output (FICTIONAL — never reuse their entities or
+wording; shown only to demonstrate the expected critical depth and the SHAPE of
+the JSON). The bands and probe counts below are arbitrary: they are two points
+on the scale, not the expected answer, and they must not anchor your own score.
+Your band is whatever STEP A of rule 6 gives for the text in front of you —
+including "excellent", "good", "fair" or lower when that is what it gives.
+
+A — strong criterion, shortcomings peripheral, most probes cleared:
+{{"band": "excellent", "score": 4.5, "band_rationale": "Every aspect the criterion asks for is answered with evidence and the two open points are presentational, which rules out 4.0; it is not a clean 5.0 because the baseline comparison the text itself invites is absent.", "confidence": "medium",
 "weakness_scan": [
-  {{"aspect": "claimed all-weather sensing performance", "verdict": "weakness", "reason": "the \\"98% detection rate\\" figure is given without test conditions or a comparison baseline"}},
   {{"aspect": "access to test infrastructure", "verdict": "cleared", "reason": "WP5 trials are assigned to Partner P3 at its accredited facility"}},
-  {{"aspect": "fallback when the datalink is jammed", "verdict": "weakness", "reason": "autonomy mode is asserted but the handover logic is not described"}}],
-"strengths": ["The division of work assigns the validation campaign to the consortium member that operates the required test infrastructure (\\"WP5 validation trials led by Partner P3 at its accredited facility\\"), matching capability to task."],
-"weaknesses": ["The proposal does not sufficiently substantiate the claimed \\"98% detection rate\\": no test conditions or baseline comparison are given, although the impact argument rests on it.", "The handover between remote control and the asserted \\"full autonomous fallback\\" under datalink jamming is not described, leaving a core operational claim unsupported."],
+  {{"aspect": "traceability of requirements to work packages", "verdict": "cleared", "reason": "Table 3.1 maps each capability requirement onto a numbered WP task"}},
+  {{"aspect": "comparison against the incumbent system", "verdict": "minor", "reason": "the gain over the fielded baseline is asserted qualitatively although the text invites a quantitative comparison"}}],
+"strengths": ["The division of work assigns the validation campaign to the consortium member that operates the required test infrastructure (\\"WP5 validation trials led by Partner P3 at its accredited facility\\"), matching capability to task.", "Requirements are traced onto tasks individually (\\"each capability requirement is mapped onto a numbered WP task in Table 3.1\\"), making the work plan auditable."],
+"weaknesses": ["The claimed improvement over the fielded baseline (\\"a substantial gain over current in-service equipment\\") is not quantified, although the argument invites the comparison."],
 "missing_evidence": [],
 "input_gaps": [],
-"evaluator_comment": "The work plan is coherent and convincingly resourced. However, the central detection-performance claim and the jamming fallback are insufficiently substantiated.",
-"recommendations": ["Substantiate the detection-rate claim with test conditions and a baseline."]}}
+"evaluator_comment": "The criterion is addressed convincingly and the work is credibly resourced. However, the advantage over the in-service baseline is asserted rather than quantified.",
+"recommendations": ["Quantify the gain over the fielded baseline against a named reference system."]}}
+
+B — the criterion's core claim is unsupported, so a probe is "significant":
+{{"band": "good", "score": 3.0, "band_rationale": "The concept is coherent and the consortium credible, so this is above \\"fair\\"; it cannot reach \\"very good\\" because the detection-performance figure the whole impact case rests on is unsubstantiated and the jamming fallback is undescribed.", "confidence": "medium",
+"weakness_scan": [
+  {{"aspect": "claimed all-weather sensing performance", "verdict": "significant", "reason": "the \\"98% detection rate\\" figure carries the impact case but is given without test conditions or a comparison baseline"}},
+  {{"aspect": "fallback when the datalink is jammed", "verdict": "significant", "reason": "autonomy mode is asserted but the handover logic is not described"}},
+  {{"aspect": "partner capability for the sensor payload", "verdict": "cleared", "reason": "Partner P2 is the fielded supplier of the equivalent payload"}}],
+"strengths": ["The sensor payload is assigned to the consortium member that already supplies the equivalent fielded equipment (\\"Partner P2, supplier of the in-service payload\\"), so the hardware path is credible."],
+"weaknesses": ["The proposal does not substantiate the claimed \\"98% detection rate\\": no test conditions or baseline comparison are given, although the impact argument rests on it.", "The handover between remote control and the asserted \\"full autonomous fallback\\" under datalink jamming is not described, leaving a core operational claim unsupported."],
+"missing_evidence": ["Test conditions and baseline for the detection-rate figure."],
+"input_gaps": [],
+"evaluator_comment": "The concept is coherent and the payload path credibly resourced. However, the central detection-performance claim and the jamming fallback are both unsupported, and the criterion's objectives depend on them.",
+"recommendations": ["Substantiate the detection-rate claim with test conditions and a baseline.", "Describe the control handover under datalink denial."]}}
 """
 
 SUMMARY_PROMPT = """You are summarising an EDF Part B proposal evaluation in the
@@ -344,6 +412,94 @@ def _reconcile_band_and_score(
     return label, adjusted, adjusted != coerced
 
 
+# Highest canonical 0–5 score a criterion may keep given how many of its own
+# weakness probes the model classified "significant"; 4+ significant probes use
+# _SEVERITY_CEILING_MIN. Rule 6 STEP B states this relationship in prose, but
+# the model does not reliably honour it: the observed failure is always the
+# same direction — every criterion lands on "very good"/4.0 whatever the scan
+# found, because the band is chosen before the severities are weighed.
+_SEVERITY_CEILING = {1: 4.0, 2: 3.5, 3: 3.0}
+_SEVERITY_CEILING_MIN = 2.5
+
+# Mirror of the ceilings: a criterion whose scan the text genuinely settled —
+# no significant probe, no minor probe, and enough probes for that to mean
+# something — has been answered convincingly and must not be parked at 4.0.
+# Without this the envelope could only push scores down, which is how "4.0
+# everywhere" became "4.0 or lower everywhere" rather than a real spread.
+_CLEAN_SCAN_FLOOR = 4.5
+_CLEAN_SCAN_MIN_PROBES = 2
+# The floor presumes a criterion that was actually addressed. A band at "fair"
+# or below says it was not, so the probes cannot mean what the floor assumes.
+_FLOOR_ELIGIBLE_BANDS = ("good", "very good", "excellent")
+
+# Legacy label: the scan verdict used to be binary ("weakness" | "cleared").
+# Runs and any cached output predating the severity split map onto "minor".
+_LEGACY_WEAKNESS_VERDICT = "weakness"
+
+
+def _severity_counts(scan: Any) -> tuple[int, int, int]:
+    """(significant, minor, cleared) over a weakness_scan, tolerant of junk."""
+    significant = minor = cleared = 0
+    for probe in scan if isinstance(scan, list) else []:
+        if not isinstance(probe, dict):
+            continue
+        verdict = str(probe.get("verdict") or "").strip().lower()
+        if verdict == "significant":
+            significant += 1
+        elif verdict in ("minor", _LEGACY_WEAKNESS_VERDICT):
+            minor += 1
+        elif verdict == "cleared":
+            cleared += 1
+    return significant, minor, cleared
+
+
+def _apply_severity_envelope(
+    band: str,
+    score: float,
+    max_score: float,
+    significant: int,
+    minor: int,
+    cleared: int,
+    allow_floor: bool = True,
+) -> tuple[str, float, str]:
+    """Constrain a reconciled (band, score) by the scan's own severity counts.
+
+    Returns (band, score, note) — note is "" when nothing moved, otherwise a
+    short human-readable reason recorded as telemetry. The band is re-derived
+    from the moved score so the pair stays self-consistent, exactly as
+    _reconcile_band_and_score guarantees for the model's own output.
+    """
+    scale = max_score / 5.0 if max_score > 0 else 0.0
+    if not scale:
+        return band, score, ""
+    canonical = score / scale
+
+    if significant:
+        ceiling = _SEVERITY_CEILING.get(significant, _SEVERITY_CEILING_MIN)
+        if canonical > ceiling:
+            return (
+                _band_for_score(ceiling),
+                ceiling * scale,
+                f"capped at {ceiling:g}/5 by {significant} significant "
+                f"weakness probe(s) in the scan",
+            )
+    elif (
+        allow_floor
+        and not minor
+        and cleared >= _CLEAN_SCAN_MIN_PROBES
+        and band in _FLOOR_ELIGIBLE_BANDS
+        and canonical < _CLEAN_SCAN_FLOOR
+    ):
+        return (
+            _band_for_score(_CLEAN_SCAN_FLOOR),
+            _CLEAN_SCAN_FLOOR * scale,
+            f"raised to {_CLEAN_SCAN_FLOOR:g}/5 — all {cleared} scan probes "
+            "were cleared and no weakness was kept",
+        )
+
+    return band, score, ""
+
+
 _CONF_ORDER = ("low", "medium", "high")
 
 
@@ -434,6 +590,7 @@ def evaluate_criterion(
     parsed.setdefault("evaluator_comment", "")
     parsed.setdefault("confidence", "medium")
     parsed.setdefault("band", "")
+    parsed.setdefault("band_rationale", "")
 
     # Band and score are reconciled into one verdict — the model reports them
     # independently and they drift. Raw values are kept as telemetry so a run
@@ -442,6 +599,28 @@ def evaluate_criterion(
     parsed["model_score"] = parsed.get("score")
     parsed["band"], parsed["score"], parsed["score_adjusted"] = (
         _reconcile_band_and_score(parsed.get("band"), parsed.get("score"), max_score)
+    )
+
+    # Then hold that verdict to the severities the scan itself assigned. The
+    # model chooses its band before weighing them, which is what collapsed every
+    # criterion onto "very good"/4.0; the envelope is the deterministic half of
+    # rule 6 STEP B. The floor is suppressed on an off-topic run — there the
+    # screening notice, not the probe tally, governs what the scan means.
+    (
+        parsed["significant_weakness_count"],
+        parsed["minor_weakness_count"],
+        parsed["cleared_probe_count"],
+    ) = _severity_counts(parsed["weakness_scan"])
+    parsed["band"], parsed["score"], parsed["severity_envelope"] = (
+        _apply_severity_envelope(
+            parsed["band"],
+            parsed["score"],
+            max_score,
+            parsed["significant_weakness_count"],
+            parsed["minor_weakness_count"],
+            parsed["cleared_probe_count"],
+            allow_floor=not off_topic,
+        )
     )
 
     # Confidence is capped mechanically by input coverage — the model cannot

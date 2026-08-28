@@ -463,6 +463,32 @@ def evaluate_proposal(
             f"({', '.join(drifted)}). The score was moved to the value its "
             "band admits — review those criteria before quoting the total."
         )
+    # Severity envelope: the score a criterion kept disagreed with the
+    # severities its own weakness scan assigned, and was moved. Same reasoning
+    # as the drift warning — a silent correction hides a model off the rubric.
+    enveloped = [r["name"] for r in results if r.get("severity_envelope")]
+    if enveloped:
+        warnings.append(
+            "Severity reconciliation: on "
+            f"{len(enveloped)} criterion/criteria ({', '.join(enveloped)}) the "
+            "score did not match the severity of the weaknesses the model "
+            "itself recorded, and was moved to the value those severities "
+            "admit — see each criterion for the adjustment applied."
+        )
+    # Discrimination guard: real ESRs spread a proposal's criteria across the
+    # scale. An identical score on every criterion is the known collapse mode
+    # of this evaluation (BENCHLOG FIX 1 residual) — the model scoring by
+    # weakness count rather than substance. Flag it rather than let a
+    # suspiciously round total pass as a judgement.
+    distinct_ratios = {round(r["score"] / (r["max_score"] or 5.0), 3) for r in results}
+    if len(results) >= 3 and len(distinct_ratios) == 1:
+        warnings.append(
+            "Calibration warning: every criterion received the SAME score "
+            f"({results[0]['score']:g}/{results[0]['max_score']:g}). Real "
+            "evaluations discriminate between a proposal's criteria — treat "
+            "this scorecard as undifferentiated rather than as agreement, and "
+            "re-check the strongest and weakest criteria by hand."
+        )
     ingest_warning = " ".join(warnings)
 
     result = {
